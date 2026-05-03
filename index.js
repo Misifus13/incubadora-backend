@@ -89,8 +89,6 @@ const mqttClient = mqtt.connect("mqtts://e46fb974d55a4c96a5bd632a3617db64.s1.eu.
 mqttClient.on("message", async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
-        
-        // Verificamos si existe en la tabla Maestra antes de insertar/actualizar
         const { data: existe } = await supabase.from('incubadoras').select('id_incubadora').eq('id_incubadora', data.id).single();
         
         if (existe) {
@@ -125,13 +123,9 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/registro", async (req, res) => {
-    // Limpiamos el ID: quitamos espacios y convertimos a mayúsculas
     const id_recibido = req.body.id_incubadora.trim().toUpperCase();
     const { usuario, contrasena, celular, email } = req.body;
 
-    console.log(`Intentando registrar ID: "${id_recibido}"`); // Esto saldrá en los logs de Render
-
-    // 1. Validar contra la tabla maestra
     const { data: maestra, error: errMaestra } = await supabase
         .from('incubadoras')
         .select('id_incubadora')
@@ -142,10 +136,8 @@ app.post("/registro", async (req, res) => {
         return res.status(400).send(`⚠️ El ID ${id_recibido} no existe en la tabla maestra.`);
     }
 
-    // 2. Asegurar que exista en estado_incubadora (necesario por las llaves foráneas)
     await supabase.from('estado_incubadora').upsert({ id_incubadora: id_recibido }, { onConflict: 'id_incubadora' });
 
-    // 3. Insertar el usuario
     const { error: errUser } = await supabase.from('usuarios').insert([
         { usuario, contrasena, id_incubadora: id_recibido, celular, email }
     ]);
@@ -168,6 +160,5 @@ app.get("/estado/:id", async (req, res) => {
     res.json(data);
 });
 
-// --- 🚀 SERVER ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("🚀 Servidor en puerto " + PORT));
