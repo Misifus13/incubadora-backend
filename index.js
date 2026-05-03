@@ -125,25 +125,33 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/registro", async (req, res) => {
-    // Usamos .trim() para limpiar lo que envíe el usuario
+    // Limpiamos el ID: quitamos espacios y convertimos a mayúsculas
+    const id_recibido = req.body.id_incubadora.trim().toUpperCase();
     const { usuario, contrasena, celular, email } = req.body;
-    const id_incubadora = req.body.id_incubadora.trim(); 
 
-    // Buscamos si existe (usando una consulta más simple)
-    const { data: listaMaestra, error: errMaestra } = await supabase
+    console.log(`Intentando registrar ID: "${id_recibido}"`); // Esto saldrá en los logs de Render
+
+    // 1. Validar contra la tabla maestra
+    const { data: maestra, error: errMaestra } = await supabase
         .from('incubadoras')
         .select('id_incubadora')
-        .eq('id_incubadora', id_incubadora);
+        .eq('id_incubadora', id_recibido)
+        .single();
 
-    if (errMaestra || !listaMaestra || listaMaestra.length === 0) {
-        return res.status(400).send(`⚠️ El ID ${id_incubadora} no está autorizado.`);
+    if (errMaestra || !maestra) {
+        return res.status(400).send(`⚠️ El ID ${id_recibido} no existe en la tabla maestra.`);
     }
 
-    // El resto del código de registro sigue igual...
-    await supabase.from('estado_incubadora').upsert({ id_incubadora }, { onConflict: 'id_incubadora' });
-    const { error } = await supabase.from('usuarios').insert([{ usuario, contrasena, id_incubadora, celular, email }]);
+    // 2. Asegurar que exista en estado_incubadora (necesario por las llaves foráneas)
+    await supabase.from('estado_incubadora').upsert({ id_incubadora: id_recibido }, { onConflict: 'id_incubadora' });
 
-    if (error) return res.status(400).send("⚠️ Error: " + error.message);
+    // 3. Insertar el usuario
+    const { error: errUser } = await supabase.from('usuarios').insert([
+        { usuario, contrasena, id_incubadora: id_recibido, celular, email }
+    ]);
+
+    if (errUser) return res.status(400).send("⚠️ Error al crear usuario: " + errUser.message);
+
     res.send("✅ Registro exitoso");
 });
 
