@@ -1,8 +1,6 @@
-// Función para mostrar/ocultar contraseña
 function togglePassword() {
     const input = document.getElementById("contrasena");
     const icon = document.getElementById("eyeIcon");
-    
     if (input.type === "password") {
         input.type = "text";
         icon.classList.replace("fa-eye", "fa-eye-slash");
@@ -29,8 +27,6 @@ async function registrar() {
         btn.innerText = "Registrando...";
         btn.disabled = true;
 
-        // CAMBIO CLAVE: Usamos una ruta relativa para que funcione en Render
-        // Esto automáticamente usará "https://incubadora-backend.onrender.com/registro"
         const res = await fetch("/registro", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -39,8 +35,8 @@ async function registrar() {
 
         const text = await res.text();
 
-        if (res.ok && (text.includes("✅") || text.toLowerCase().includes("éxito"))) {
-            alert("¡Cuenta creada con éxito! Ya puedes iniciar sesión.");
+        if (res.ok) {
+            alert("✅ ¡Cuenta creada con éxito! Ya puedes iniciar sesión.");
             window.location = "index.html";
         } else {
             alert(text); 
