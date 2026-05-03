@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Control - Incubadora Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 1. LIBRERÍA DE SUPABASE (Indispensable para la conexión) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body class="dashboard-body">
+    <nav class="navbar">
+        <span class="logo"><i class="fas fa-egg"></i> SmartEncub</span>
+        <button class="btn-logout" onclick="logout()">
+            <i class="fas fa-sign-out-alt"></i> Salir
+        </button>
+    </nav>
+
+    <div class="dashboard-container">
+
+        <!-- Mensaje cuando la incubadora está apagada -->
+        <div id="msgInactiva" style="display: none; text-align: center; margin-top: 50px;">
+            <i class="fas fa-power-off" style="font-size: 4rem; color: #cbd5e0; margin-bottom: 20px;"></i>
+            <h2 style="color: #4a5568;">Incubadora Inactiva</h2>
+            <p>Los datos se mostrarán cuando el dispositivo comience a incubar.</p>
+            <button class="btn-edit" onclick="abrirModal()" style="width: auto; margin-top: 15px; background-color: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer;">
+                <i class="fas fa-play"></i> Configurar y Activar
+            </button>
+        </div>
+
+        <div id="dashboardContent">
+            <div class="main-grid">
+                
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <h3><i class="fas fa-broadcast-tower"></i> Tiempo Real</h3>
+                        <span id="txtEstado" class="badge">---</span>
+                    </div>
+                    <div class="readings-container">
+                        <div class="reading-item">
+                            <i class="fas fa-thermometer-half icon-temp"></i>
+                            <div>
+                                <p>Temperatura</p>
+                                <h2 id="currentTemp">-- °C</h2>
+                            </div>
+                        </div>
+                        <div class="reading-item">
+                            <i class="fas fa-tint icon-hum"></i>
+                            <div>
+                                <p>Humedad</p>
+                                <h2 id="currentHum">-- %</h2>
+                            </div>
+                        </div>
+                        
+                        <div class="reading-item">
+                            <i class="fas fa-hourglass-half" style="color: #10b981;"></i>
+                            <div>
+                                <p>Tiempo Restante</p>
+                                <h2 id="tiempoRestante" style="font-size: 1.6rem; color: #1f2937;">---</h2>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <h3><i class="fas fa-cog"></i> Configuración</h3>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn-edit" onclick="abrirModal()">
+                                <i class="fas fa-edit"></i> Editar
+                            </button>
+                            <button class="btn-detener" onclick="cancelarIncubacion()">
+                                <i class="fas fa-stop-circle"></i> Detener
+                            </button>
+                        </div>
+                    </div>
+                    <div class="settings-container">
+                        <div class="setting-item">
+                            <span>Set Temp:</span>
+                            <b id="setTemp">0</b>°C
+                        </div>
+                        <div class="setting-item">
+                            <span>Set Hum:</span>
+                            <b id="setHum">0</b>%
+                        </div>
+                        <div class="setting-item">
+                            <span>Días:</span>
+                            <b id="setDias">0</b>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="chart-container">
+                <div style="margin-bottom: 15px; font-weight: 600; color: #374151;">
+                    <i class="fas fa-history"></i> Historial (Últimas 20 lecturas)
+                </div>
+                <div style="height: 300px;">
+                    <canvas id="grafica"></canvas>
+                </div>
+            </div>
+        </div> 
+    </div>
+
+    <!-- Modal para actualizar configuración -->
+    <div id="modalEdit" class="modal">
+        <div class="modal-content">
+            <h3>Actualizar Incubadora</h3>
+            <div class="input-group-modal">
+                <label>Temperatura Deseada (°C)</label>
+                <input type="number" id="inputTemp" step="0.1">
+            </div>
+            <div class="input-group-modal">
+                <label>Humedad Deseada (%)</label>
+                <input type="number" id="inputHum">
+            </div>
+            <div class="input-group-modal">
+                <label>Días de Incubación</label>
+                <input type="number" id="inputDias">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="cerrarModal()">Cancelar</button>
+                <button class="btn-save" onclick="guardarCambios()">Enviar al ESP32</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+    "name": "backend-incubadora",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "commonjs",
+    "dependencies": {
+        "cors": "^2.8.6",
+        "express": "^4.22.1",
+        "mqtt": "^4.3.8",
+        "mssql": "^10.0.4",
+        "node-cron": "^3.0.3",
+        "nodemailer": "^6.10.1",
+        "path": "^0.12.7"
+    }
+}
