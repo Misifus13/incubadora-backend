@@ -125,17 +125,22 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/registro", async (req, res) => {
-    const { usuario, contrasena, id_incubadora, celular, email } = req.body;
+    // Usamos .trim() para limpiar lo que envíe el usuario
+    const { usuario, contrasena, celular, email } = req.body;
+    const id_incubadora = req.body.id_incubadora.trim(); 
 
-    // 1. Verificar si existe en la tabla MAESTRA
-    const { data: maestra } = await supabase.from('incubadoras').select('id_incubadora').eq('id_incubadora', id_incubadora).single();
+    // Buscamos si existe (usando una consulta más simple)
+    const { data: listaMaestra, error: errMaestra } = await supabase
+        .from('incubadoras')
+        .select('id_incubadora')
+        .eq('id_incubadora', id_incubadora);
 
-    if (!maestra) return res.status(400).send("⚠️ El ID de incubadora no está autorizado en el sistema.");
+    if (errMaestra || !listaMaestra || listaMaestra.length === 0) {
+        return res.status(400).send(`⚠️ El ID ${id_incubadora} no está autorizado.`);
+    }
 
-    // 2. Crear entrada en estado_incubadora si no existe (necesario para las alertas)
+    // El resto del código de registro sigue igual...
     await supabase.from('estado_incubadora').upsert({ id_incubadora }, { onConflict: 'id_incubadora' });
-
-    // 3. Registrar al usuario
     const { error } = await supabase.from('usuarios').insert([{ usuario, contrasena, id_incubadora, celular, email }]);
 
     if (error) return res.status(400).send("⚠️ Error: " + error.message);
