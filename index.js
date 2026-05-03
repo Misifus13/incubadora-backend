@@ -30,14 +30,16 @@ const transporter = nodemailer.createTransport({
 // --- 🔥 SISTEMA DE ALERTAS ---
 async function sistemaDeAlertas() {
     try {
+        // Coincide con tabla 'estado_incubadora' y campo 'estado'
         const { data: incubadoras, error: errInc } = await supabase
             .from('estado_incubadora')
             .select('*')
-            .eq('estado', 'Activa');
+            .eq('estado', 'Activa'); // Sensible a mayúsculas según tu corrección
 
         if (errInc || !incubadoras) return;
 
         for (let r of incubadoras) {
+            // Coincide con tabla 'datos_incubadora' y campos 'temperatura', 'humedad', 'fecha_hora'
             const { data: lecturas } = await supabase
                 .from('datos_incubadora')
                 .select('temperatura, humedad, fecha_hora')
@@ -59,6 +61,7 @@ async function sistemaDeAlertas() {
             }
 
             if (alertMsg) {
+                // Coincide con tabla 'usuarios'
                 const { data: user } = await supabase
                     .from('usuarios')
                     .select('email')
@@ -89,10 +92,12 @@ const mqttClient = mqtt.connect("mqtts://e46fb974d55a4c96a5bd632a3617db64.s1.eu.
 mqttClient.on("message", async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
+        // Verifica contra tabla maestra 'incubadoras'
         const { data: existe } = await supabase.from('incubadoras').select('id_incubadora').eq('id_incubadora', data.id).single();
         
         if (existe) {
             if (data.tipo === "ESTADO") {
+                // Coincide con tabla 'estado_incubadora'
                 await supabase.from('estado_incubadora').upsert({
                     id_incubadora: data.id,
                     estado: data.estado,
@@ -100,9 +105,10 @@ mqttClient.on("message", async (topic, message) => {
                     set_hum: data.set_hum,
                     set_dias: data.set_dias,
                     set_rot: data.set_rot,
-                    fecha_inicio: data.inicio_inc
+                    fecha_inicio: data.inicio_inc // Mapeo de BIGINT para fecha_inicio
                 });
             } else {
+                // Coincide con tabla 'datos_incubadora'
                 await supabase.from('datos_incubadora').insert({
                     id_incubadora: data.id,
                     temperatura: data.temp,
@@ -117,7 +123,14 @@ mqttClient.on("message", async (topic, message) => {
 
 app.post("/login", async (req, res) => {
     const { usuario, contrasena } = req.body;
-    const { data, error } = await supabase.from('usuarios').select('*').eq('usuario', usuario).eq('contrasena', contrasena).single();
+    // Coincide con campos de tabla 'usuarios'
+    const { data, error } = await supabase
+        .from('usuarios')
+        .select('*')
+        .eq('usuario', usuario)
+        .eq('contrasena', contrasena)
+        .single();
+        
     if (error || !data) return res.status(401).send("Credenciales incorrectas");
     res.json(data);
 });
@@ -126,6 +139,7 @@ app.post("/registro", async (req, res) => {
     const id_recibido = req.body.id_incubadora.trim().toUpperCase();
     const { usuario, contrasena, celular, email } = req.body;
 
+    // 1. Validar contra tabla maestra 'incubadoras'
     const { data: maestra, error: errMaestra } = await supabase
         .from('incubadoras')
         .select('id_incubadora')
@@ -136,10 +150,18 @@ app.post("/registro", async (req, res) => {
         return res.status(400).send(`⚠️ El ID ${id_recibido} no existe en la tabla maestra.`);
     }
 
+    // 2. Inicializar en 'estado_incubadora' para evitar errores de FK
     await supabase.from('estado_incubadora').upsert({ id_incubadora: id_recibido }, { onConflict: 'id_incubadora' });
 
+    // 3. Insertar en tabla 'usuarios' respetando tus campos
     const { error: errUser } = await supabase.from('usuarios').insert([
-        { usuario, contrasena, id_incubadora: id_recibido, celular, email }
+        { 
+            usuario, 
+            contrasena, 
+            id_incubadora: id_recibido, 
+            celular, 
+            email 
+        }
     ]);
 
     if (errUser) return res.status(400).send("⚠️ Error al crear usuario: " + errUser.message);
@@ -148,14 +170,26 @@ app.post("/registro", async (req, res) => {
 });
 
 app.get("/datos/:id", async (req, res) => {
+    // Implementación de tu preferencia de últimas 20 lecturas
     const limite = parseInt(req.query.limite) || 20;
-    const { data, error } = await supabase.from('datos_incubadora').select('*').eq('id_incubadora', req.params.id).order('fecha_hora', { ascending: false }).limit(limite);
+    const { data, error } = await supabase
+        .from('datos_incubadora')
+        .select('*')
+        .eq('id_incubadora', req.params.id)
+        .order('fecha_hora', { ascending: false })
+        .limit(limite);
+        
     if (error) return res.status(500).send(error.message);
     res.json(data);
 });
 
 app.get("/estado/:id", async (req, res) => {
-    const { data, error } = await supabase.from('estado_incubadora').select('*').eq('id_incubadora', req.params.id).single();
+    const { data, error } = await supabase
+        .from('estado_incubadora')
+        .select('*')
+        .eq('id_incubadora', req.params.id)
+        .single();
+        
     if (error || !data) return res.json({ estado: "Inactiva" });
     res.json(data);
 });
