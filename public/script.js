@@ -24,41 +24,35 @@ async function login() {
     }
 
     try {
-        // Bloqueamos el botón para evitar múltiples clics
         btn.innerText = "Verificando...";
         btn.disabled = true;
 
-        const response = await fetch("https://rg-incubadora-yo123-fwcfebdmdsg8dkgr.chilecentral-01.azurewebsites.net/login", {
+        // CAMBIO CRUCIAL: Usamos ruta relativa para que funcione en Render
+        const response = await fetch("/login", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({usuario, contrasena})
         });
 
-        const resultText = await response.text();
-        let data;
-
-        try {
-            data = JSON.parse(resultText);
-        } catch (parseError) {
-            alert("Error en la respuesta del servidor.");
-            console.error("No es JSON:", resultText);
-            return;
-        }
-
-        if (Array.isArray(data) && data.length > 0) {
-            // Guardamos el ID de la incubadora para usarlo en el dashboard
-            localStorage.setItem("id_incubadora", data[0].id_incubadora);
-            // Redirigir al panel de control
-            window.location = "dashboard.html";
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Verificamos que el objeto tenga el id_incubadora (según tu tabla usuarios)
+            if (data && data.id_incubadora) {
+                localStorage.setItem("id_incubadora", data.id_incubadora);
+                window.location = "dashboard.html";
+            } else {
+                alert("Error: No se encontró una incubadora asociada a este usuario.");
+            }
         } else {
-            alert("Usuario o contraseña incorrectos.");
+            const errorMsg = await response.text();
+            alert(errorMsg || "Usuario o contraseña incorrectos.");
         }
 
     } catch (error) {
-        alert("No se pudo conectar con el servidor. Revisa tu internet.");
+        alert("No se pudo conectar con el servidor. El servicio podría estar despertando, intenta de nuevo en unos segundos.");
         console.error("Error de red:", error);
     } finally {
-        // Restauramos el botón pase lo que pase
         btn.innerText = "Ingresar";
         btn.disabled = false;
     }
