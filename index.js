@@ -27,19 +27,17 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// --- 🔥 SISTEMA DE ALERTAS ---
+// --- 🔥 SISTEMA DE ALERTAS (Cada 5 min) ---
 async function sistemaDeAlertas() {
     try {
-        // Coincide con tabla 'estado_incubadora' y campo 'estado'
         const { data: incubadoras, error: errInc } = await supabase
             .from('estado_incubadora')
             .select('*')
-            .eq('estado', 'Activa'); // Sensible a mayúsculas según tu corrección
+            .eq('estado', 'Activa');
 
         if (errInc || !incubadoras) return;
 
         for (let r of incubadoras) {
-            // Coincide con tabla 'datos_incubadora' y campos 'temperatura', 'humedad', 'fecha_hora'
             const { data: lecturas } = await supabase
                 .from('datos_incubadora')
                 .select('temperatura, humedad, fecha_hora')
@@ -47,7 +45,7 @@ async function sistemaDeAlertas() {
                 .order('fecha_hora', { ascending: false })
                 .limit(1);
 
-            const d = lecturas ? lecturas[0] : null;
+            const d = lecturas && lecturas.length > 0 ? lecturas[0] : null;
             if (!d) continue;
 
             let alertMsg = "";
@@ -61,16 +59,15 @@ async function sistemaDeAlertas() {
             }
 
             if (alertMsg) {
-                // Coincide con tabla 'usuarios'
                 const { data: user } = await supabase
                     .from('usuarios')
                     .select('email')
                     .eq('id_incubadora', r.id_incubadora)
-                    .single();
+                    .maybeSingle();
 
                 if (user?.email) {
                     await transporter.sendMail({
-                        from: '"SmartEncub Pro" <wilfred1130594@gmail.com>',
+                        from: `"SmartEncub Pro" <${process.env.EMAIL_USER}>`,
                         to: user.email, 
                         subject: `⚠️ AVISO: ${r.id_incubadora}`,
                         html: `<div style="font-family:sans-serif; border:2px solid #e74c3c; padding:20px;">
@@ -83,99 +80,99 @@ async function sistemaDeAlertas() {
 }
 cron.schedule('*/5 * * * *', sistemaDeAlertas);
 
-// --- 🔹 MQTT ---
+// --- 📡 MQTT: CONEXIÓN Y RECEPCIÓN ---
 const mqttClient = mqtt.connect("mqtts://e46fb974d55a4c96a5bd632a3617db64.s1.eu.hivemq.cloud:8883", {
     username: process.env.MQTT_USER,
     password: process.env.MQTT_PASS
 });
 
+mqttClient.on("connect", () => {
+    console.log("✅ Conectado a HiveMQ Cloud");
+    // IMPORTANTE: El servidor debe estar suscrito para recibir mensajes
+    mqttClient.subscribe("jhosimar/rtc", (err) => {
+        if (!err) console.log("📡 Suscrito al tópico jhosimar/rtc");
+    });
+});
+
 mqttClient.on("message", async (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
-        // Verifica contra tabla maestra 'incubadoras'
-        const { data: existe } = await supabase.from('incubadoras').select('id_incubadora').eq('id_incubadora', data.id).single();
+        console.log("📩 Datos recibidos:", data);
+
+        // 1. Validar contra tabla maestra
+        const { data: existe } = await supabase
+            .from('incubadoras')
+            .select('id_incubadora')
+            .eq('id_incubadora', data.id)
+            .maybeSingle();
         
-        if (existe) {
-            if (data.tipo === "ESTADO") {
-                // Coincide con tabla 'estado_incubadora'
-                await supabase.from('estado_incubadora').upsert({
-                    id_incubadora: data.id,
-                    estado: data.estado,
-                    set_temp: data.set_temp,
-                    set_hum: data.set_hum,
-                    set_dias: data.set_dias,
-                    set_rot: data.set_rot,
-                    fecha_inicio: data.inicio_inc // Mapeo de BIGINT para fecha_inicio
-                });
-            } else {
-                // Coincide con tabla 'datos_incubadora'
-                await supabase.from('datos_incubadora').insert({
-                    id_incubadora: data.id,
-                    temperatura: data.temp,
-                    humedad: data.hum
-                });
-            }
+        if (!existe) return console.log(`🚫 ID ${data.id} no autorizado.`);
+
+        if (data.tipo === "ESTADO") {
+            // Actualizar estado (UPSERT: Inserta si no existe, actualiza si existe)
+            const { error } = await supabase.from('estado_incubadora').upsert({
+                id_incubadora: data.id,
+                estado: data.estado,
+                set_temp: data.set_temp,
+                set_hum: data.set_hum,
+                set_dias: data.set_dias,
+                set_rot: data.set_rot,
+                fecha_inicio: data.inicio_inc 
+            });
+            if (error) console.error("❌ Error al guardar estado:", error.message);
+        } else {
+            // Insertar lectura de sensores
+            const { error } = await supabase.from('datos_incubadora').insert({
+                id_incubadora: data.id,
+                temperatura: data.temp,
+                humedad: data.hum
+            });
+            if (error) console.error("❌ Error al guardar lectura:", error.message);
         }
-    } catch (err) { console.error("❌ Error MQTT:", err.message); }
+    } catch (err) { console.error("❌ Error procesando MQTT:", err.message); }
 });
 
-// --- 🔐 RUTAS API ---
+// --- 🔐 RUTAS API (SUPABASE) ---
 
 app.post("/login", async (req, res) => {
     const { usuario, contrasena } = req.body;
-    
     const { data, error } = await supabase
         .from('usuarios')
         .select('*')
         .eq('usuario', usuario)
         .eq('contrasena', contrasena)
-        .maybeSingle(); // Cambiado de .single() para evitar errores 406
+        .maybeSingle();
         
     if (error) return res.status(500).send("Error en el servidor");
     if (!data) return res.status(401).send("Usuario o contraseña incorrectos");
-    
-    res.json(data); // Envía el objeto del usuario directamente
+    res.json(data);
 });
 
 app.post("/registro", async (req, res) => {
-    // Recibimos los datos del registro.js
     const { usuario, contrasena, celular, email } = req.body;
-    
-    // Limpiamos el ID recibido para evitar errores por espacios o minúsculas
     const id_recibido = req.body.id_incubadora.trim().toUpperCase();
 
-    // --- 🔍 PASO 1: Comparar con la tabla 'incubadoras' ---
+    // Comparar con tabla maestra
     const { data: maestra, error: errMaestra } = await supabase
         .from('incubadoras')
         .select('id_incubadora')
         .eq('id_incubadora', id_recibido)
-        .maybeSingle(); // Verifica si existe el ID enviado
+        .maybeSingle();
 
     if (errMaestra || !maestra) {
-        // Si no existe en la tabla maestra, rechazamos el registro
-        return res.status(400).send(`⚠️ El ID ${id_recibido} no es válido o no está registrado en el sistema.`);
+        return res.status(400).send(`⚠️ El ID ${id_recibido} no es válido.`);
     }
 
-    // --- ✅ PASO 2: Si existe, crear el usuario ---
+    // Crear usuario
     const { error: errUser } = await supabase.from('usuarios').insert([
-        { 
-            usuario, 
-            contrasena, 
-            id_incubadora: id_recibido, 
-            celular, 
-            email 
-        }
+        { usuario, contrasena, id_incubadora: id_recibido, celular, email }
     ]);
 
-    if (errUser) {
-        return res.status(400).send("⚠️ Error: El nombre de usuario ya existe.");
-    }
-
+    if (errUser) return res.status(400).send("⚠️ El usuario ya existe.");
     res.send("✅ Registro exitoso");
 });
 
 app.get("/datos/:id", async (req, res) => {
-    // Implementación de tu preferencia de últimas 20 lecturas
     const limite = parseInt(req.query.limite) || 20;
     const { data, error } = await supabase
         .from('datos_incubadora')
@@ -193,10 +190,30 @@ app.get("/estado/:id", async (req, res) => {
         .from('estado_incubadora')
         .select('*')
         .eq('id_incubadora', req.params.id)
-        .single();
+        .maybeSingle();
         
     if (error || !data) return res.json({ estado: "Inactiva" });
     res.json(data);
+});
+
+// Enviar configuración al ESP32 vía MQTT
+app.post("/actualizar-config", async (req, res) => {
+    const data = req.body;
+    try {
+        const mensajeMQTT = JSON.stringify({
+            id: data.id,
+            estado: data.estado,
+            set_temp: data.set_temp,
+            set_hum: data.set_hum,
+            set_dias: data.set_dias,
+            set_rot: data.set_rot
+        });
+
+        mqttClient.publish("jhosimar/config", mensajeMQTT, (err) => {
+            if (err) return res.status(500).send("Error MQTT");
+            res.send("Configuración enviada");
+        });
+    } catch (e) { res.status(500).send("Error"); }
 });
 
 const PORT = process.env.PORT || 3000;
