@@ -55,12 +55,14 @@ mqttClient.on("error", (err) => {
 
 // --- 🔥 REALTIME: ESCUCHAR CAMBIOS EN SUPABASE Y REENVIAR AL ESP32 AUTOMÁTICAMENTE ---
 // Esto resuelve el problema de que el ESP32 no recibe si editas en la DB
+// Variable para guardar el último mensaje enviado y evitar ecos
+let ultimoMensajeEnviado = "";
+
 supabase
     .channel('cambios-db')
     .on('postgres_changes', 
         { event: 'UPDATE', schema: 'public', table: 'estado_incubadora' }, 
         (payload) => {
-            console.log("🔄 Cambio detectado en DB, sincronizando ESP32...");
             const data = payload.new;
             const mensajeMQTT = JSON.stringify({
                 id: data.id_incubadora,
@@ -70,9 +72,20 @@ supabase
                 set_dias: data.set_dias,
                 set_rot: data.set_rot
             });
+
+            // --- BLOQUEO DE BUCLE ---
+            // Si el mensaje es idéntico al anterior, lo ignoramos
+            if (mensajeMQTT === ultimoMensajeEnviado) {
+                return; 
+            }
+
             if (mqttClient.connected) {
+                ultimoMensajeEnviado = mensajeMQTT; // Registramos lo que enviamos
                 mqttClient.publish("jhosimar/config", mensajeMQTT);
-                console.log("📤 Configuración reenviada vía Realtime:", mensajeMQTT);
+                console.log("📤 Sincronización única enviada al ESP32");
+                
+                // Limpiamos el registro después de 5 segundos para permitir cambios legítimos
+                setTimeout(() => { ultimoMensajeEnviado = ""; }, 5000);
             }
         }
     )
