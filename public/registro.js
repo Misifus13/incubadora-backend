@@ -12,11 +12,12 @@ function togglePassword() {
 
 async function registrar() {
     const btn = document.getElementById("btnRegistro");
-    const usuario = document.getElementById("usuario").value;
-    const contrasena = document.getElementById("contrasena").value;
-    const id_incubadora = document.getElementById("id_incubadora").value;
-    const celular = document.getElementById("celular").value;
-    const email = document.getElementById("email").value;
+    // Usamos .trim() para evitar espacios accidentales
+    const usuario = document.getElementById("usuario").value.trim();
+    const contrasena = document.getElementById("contrasena").value.trim();
+    const id_incubadora = document.getElementById("id_incubadora").value.trim().toUpperCase();
+    const celular = document.getElementById("celular").value.trim();
+    const email = document.getElementById("email").value.trim();
 
     if (!usuario || !contrasena || !id_incubadora || !celular || !email) {
         alert("Por favor, completa todos los campos.");
@@ -36,14 +37,15 @@ async function registrar() {
         const text = await res.text();
 
         if (res.ok) {
-            alert("✅ ¡Cuenta creada con éxito! Ya puedes iniciar sesión.");
+            alert("✅ ¡Cuenta creada con éxito!");
             window.location = "index.html";
         } else {
+            // Esto mostrará el error específico (ej: "ID no existe en tabla maestra")
             alert(text); 
         }
 
     } catch (error) {
-        alert("Error de conexión con el servidor");
+        alert("Error de conexión. Verifica si tu servidor en Render está activo.");
         console.error(error);
     } finally {
         btn.innerText = "Crear cuenta";
