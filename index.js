@@ -123,16 +123,18 @@ mqttClient.on("message", async (topic, message) => {
 
 app.post("/login", async (req, res) => {
     const { usuario, contrasena } = req.body;
-    // Coincide con campos de tabla 'usuarios'
+    
     const { data, error } = await supabase
         .from('usuarios')
         .select('*')
         .eq('usuario', usuario)
         .eq('contrasena', contrasena)
-        .single();
+        .maybeSingle(); // Cambiado de .single() para evitar errores 406
         
-    if (error || !data) return res.status(401).send("Credenciales incorrectas");
-    res.json(data);
+    if (error) return res.status(500).send("Error en el servidor");
+    if (!data) return res.status(401).send("Usuario o contraseña incorrectos");
+    
+    res.json(data); // Envía el objeto del usuario directamente
 });
 
 app.post("/registro", async (req, res) => {
