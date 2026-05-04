@@ -138,24 +138,25 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/registro", async (req, res) => {
-    const id_recibido = req.body.id_incubadora.trim().toUpperCase();
+    // Recibimos los datos del registro.js
     const { usuario, contrasena, celular, email } = req.body;
+    
+    // Limpiamos el ID recibido para evitar errores por espacios o minúsculas
+    const id_recibido = req.body.id_incubadora.trim().toUpperCase();
 
-    // 1. Validar contra tabla maestra 'incubadoras'
+    // --- 🔍 PASO 1: Comparar con la tabla 'incubadoras' ---
     const { data: maestra, error: errMaestra } = await supabase
         .from('incubadoras')
         .select('id_incubadora')
         .eq('id_incubadora', id_recibido)
-        .single();
+        .maybeSingle(); // Verifica si existe el ID enviado
 
     if (errMaestra || !maestra) {
-        return res.status(400).send(`⚠️ El ID ${id_recibido} no existe en la tabla maestra.`);
+        // Si no existe en la tabla maestra, rechazamos el registro
+        return res.status(400).send(`⚠️ El ID ${id_recibido} no es válido o no está registrado en el sistema.`);
     }
 
-    // 2. Inicializar en 'estado_incubadora' para evitar errores de FK
-    await supabase.from('estado_incubadora').upsert({ id_incubadora: id_recibido }, { onConflict: 'id_incubadora' });
-
-    // 3. Insertar en tabla 'usuarios' respetando tus campos
+    // --- ✅ PASO 2: Si existe, crear el usuario ---
     const { error: errUser } = await supabase.from('usuarios').insert([
         { 
             usuario, 
@@ -166,7 +167,9 @@ app.post("/registro", async (req, res) => {
         }
     ]);
 
-    if (errUser) return res.status(400).send("⚠️ Error al crear usuario: " + errUser.message);
+    if (errUser) {
+        return res.status(400).send("⚠️ Error: El nombre de usuario ya existe.");
+    }
 
     res.send("✅ Registro exitoso");
 });
