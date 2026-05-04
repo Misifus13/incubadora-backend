@@ -1,7 +1,7 @@
-// 1. CONFIGURACIÓN DE RUTAS (Azure Backend)
-const BASE_URL = "https://rg-incubadora-yo123-fwcfebdmdsg8dkgr.chilecentral-01.azurewebsites.net";
-const API_DATOS = `${BASE_URL}/datos/`;
-const API_ESTADO = `${BASE_URL}/estado/`;
+// 1. CONFIGURACIÓN DE CREDENCIALES
+const SUPABASE_URL = "https://qpuvmkpgdcsahewfuqre.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFwdXZta3BnZGNzYWhld2Z1cXJlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4MjY0NzYsImV4cCI6MjA5MzQwMjQ3Nn0.U0SQh1xIWh9IV6Bk3jVFr3V-AraEZG8rg40niwi-3cY";
+const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let chart;
 let estadoActual = "INACTIVA";
@@ -18,31 +18,35 @@ document.addEventListener("DOMContentLoaded", () => {
     cargarEstadoActual();
     cargarDatos();
 
-    // Ciclo de actualización cada 5 segundos
+    // Actualización automática cada 5 segundos
     setInterval(() => {
         cargarEstadoActual();
-        // Solo recarga la gráfica y sensores si el sistema está trabajando
         if (estadoActual.toUpperCase() === "ACTIVA") {
             cargarDatos();
         }
     }, 5000);
 });
 
-// 3. CONTROL DE VISIBILIDAD Y ESTADO
+// 3. OBTENER ESTADO (Control de visibilidad idéntico al de Azure)
 async function cargarEstadoActual() {
     try {
         const id = localStorage.getItem("id_incubadora");
-        const res = await fetch(`${API_ESTADO}${id}`);
-        if (!res.ok) throw new Error("Error en petición de estado");
         
-        const data = await res.json();
+        const { data, error } = await _supabase
+            .from('estado_incubadora')
+            .select('*')
+            .eq('id_incubadora', id)
+            .single();
+
+        if (error) throw error;
+
         const content = document.getElementById("dashboardContent");
         const msgInactiva = document.getElementById("msgInactiva");
         const elEstado = document.getElementById("txtEstado");
 
         if (data) {
-            // Manejo de case-sensitivity (estado o Estado)
-            estadoActual = data.estado ?? data.Estado ?? "INACTIVA";
+            // Manejo de Mayúsculas/Minúsculas para mayor seguridad
+            estadoActual = data.estado ?? "INACTIVA";
             elEstado.innerText = estadoActual;
 
             if (estadoActual.toUpperCase() === "INACTIVA") {
@@ -54,54 +58,56 @@ async function cargarEstadoActual() {
                 msgInactiva.style.display = "none";
                 elEstado.style.color = "#48bb78";
 
-                // Actualizar Setpoints en la UI
-                document.getElementById("setTemp").innerText = data.set_temp ?? data.Set_Temp ?? "0";
-                document.getElementById("setHum").innerText = data.set_hum ?? data.Set_Hum ?? "0";
-                document.getElementById("setDias").innerText = data.set_dias ?? data.Set_Dias ?? "0";
+                // Sincronizar Setpoints
+                document.getElementById("setTemp").innerText = data.set_temp ?? "0";
+                document.getElementById("setHum").innerText = data.set_hum ?? "0";
+                document.getElementById("setDias").innerText = data.set_dias ?? "0";
 
-                // Tiempo restante con compensación de zona horaria
                 const timerElement = document.getElementById("tiempoRestante");
                 if (timerElement) {
-                    const fechaInicio = data.fecha_inicio ?? data.Fecha_Inicio;
-                    const setDias = data.set_dias ?? data.Set_Dias;
-                    timerElement.innerText = calcularTiempoRestante(fechaInicio, setDias);
+                    timerElement.innerText = calcularTiempoRestante(data.fecha_inicio, data.set_dias);
                 }
             }
         }
     } catch (err) {
-        console.error("Error cargando estado:", err);
+        console.error("Error cargando estado:", err.message);
     }
 }
 
-// 4. CARGAR DATOS DE SENSORES Y GRÁFICA
+// 4. CARGAR LECTURAS PARA LA GRÁFICA (Últimas 20)
 async function cargarDatos() {
     try {
         const id = localStorage.getItem("id_incubadora");
-        // Solicitamos las últimas 20 lecturas para la gráfica
-        const res = await fetch(`${API_DATOS}${id}?limite=20`);
-        const data = await res.json();
+        
+        const { data, error } = await _supabase
+            .from('datos_incubadora')
+            .select('*')
+            .eq('id_incubadora', id)
+            .order('fecha_hora', { ascending: false })
+            .limit(20);
 
+        if (error) throw error;
         if (!data || data.length === 0) return;
 
-        // Invertimos el array para que el tiempo avance de izquierda a derecha
+        // Invertimos para que la gráfica fluya de izquierda a derecha
         const datosOrdenados = [...data].reverse();
         const ultimo = datosOrdenados[datosOrdenados.length - 1];
 
-        // Actualizar indicadores numéricos (Tiempo Real)
-        document.getElementById("currentTemp").innerText = `${Number(ultimo.temperatura ?? ultimo.Temperatura ?? 0).toFixed(1)} °C`;
-        document.getElementById("currentHum").innerText = `${Number(ultimo.humedad ?? ultimo.Humedad ?? 0).toFixed(1)} %`;
+        // Actualizar indicadores de Tiempo Real
+        document.getElementById("currentTemp").innerText = `${Number(ultimo.temperatura ?? 0).toFixed(1)} °C`;
+        document.getElementById("currentHum").innerText = `${Number(ultimo.humedad ?? 0).toFixed(1)} %`;
 
         dibujarGrafica(datosOrdenados);
     } catch (err) {
-        console.error("Error cargando datos:", err);
+        console.error("Error cargando datos:", err.message);
     }
 }
 
 // 5. LÓGICA DE CHART.JS
 function dibujarGrafica(data) {
-    const labels = data.map(d => new Date(d.fecha_hora ?? d.Fecha_Hora).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    const temps = data.map(d => d.temperatura ?? d.Temperatura);
-    const hums = data.map(d => d.humedad ?? d.Humedad);
+    const labels = data.map(d => new Date(d.fecha_hora).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    const temps = data.map(d => d.temperatura);
+    const hums = data.map(d => d.humedad);
 
     const ctx = document.getElementById("grafica").getContext("2d");
 
@@ -131,7 +137,7 @@ function dibujarGrafica(data) {
     });
 }
 
-// 6. GESTIÓN DEL MODAL DE CONFIGURACIÓN
+// 6. GESTIÓN DE CONFIGURACIÓN Y MODAL
 function abrirModal() {
     document.getElementById("inputTemp").value = document.getElementById("setTemp").innerText;
     document.getElementById("inputHum").value = document.getElementById("setHum").innerText;
@@ -146,79 +152,61 @@ function cerrarModal() {
 async function guardarCambios() {
     const id = localStorage.getItem("id_incubadora");
     const payload = {
-        id: id,
-        tipo: "ESTADO",
         estado: "Activa",
         set_temp: parseFloat(document.getElementById("inputTemp").value),
         set_hum: parseFloat(document.getElementById("inputHum").value),
         set_dias: parseInt(document.getElementById("inputDias").value),
-        set_rot: 0
+        ultima_actualizacion: new Date().toISOString()
     };
 
     try {
-        const res = await fetch(`${BASE_URL}/actualizar-config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const { error } = await _supabase
+            .from('estado_incubadora')
+            .update(payload)
+            .eq('id_incubadora', id);
 
-        if (res.ok) {
-            alert("✅ Configuración enviada correctamente");
-            cerrarModal();
-            cargarEstadoActual();
-        } else {
-            alert("❌ Error al actualizar");
-        }
+        if (error) throw error;
+
+        alert("✅ Configuración enviada correctamente");
+        cerrarModal();
+        cargarEstadoActual();
     } catch (err) {
-        alert("❌ Error de conexión");
+        alert("❌ Error al actualizar: " + err.message);
     }
 }
 
-// 7. FUNCIONES DE APOYO (TIEMPO Y CANCELACIÓN)
-function calcularTiempoRestante(fechaInicioUnix, diasTotales) {
-    if (!fechaInicioUnix || fechaInicioUnix == 0) return "---";
-
-    // Compensación UTC-4 (Bolivia)
-    const offsetBolivia = 4 * 60 * 60 * 1000;
-    const fechaInicio = new Date((fechaInicioUnix * 1000) + offsetBolivia);
-    const fechaFin = new Date(fechaInicio.getTime() + (diasTotales * 24 * 60 * 60 * 1000));
-    
-    const ahora = new Date();
-    const diferencia = fechaFin - ahora;
-
-    if (diferencia <= 0) return "¡Finalizada!";
-
-    const dias = Math.floor(diferencia / (1000 * 60 * 60 * 24));
-    const horas = Math.floor((diferencia % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    const minutos = Math.floor((diferencia % (1000 * 60 * 60)) / (1000 * 60));
-    
-    return `${dias}d ${horas}h ${minutos}m`;
-}
-
+// 7. FUNCIONES DE APOYO
 async function cancelarIncubacion() {
     if (!confirm("⚠️ ¿Estás seguro de cancelar? El sistema se apagará.")) return;
 
     const id = localStorage.getItem("id_incubadora");
-    const payload = {
-        id: id,
-        tipo: "ESTADO",
-        estado: "Inactiva"
-    };
-
     try {
-        const res = await fetch(`${BASE_URL}/actualizar-config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const { error } = await _supabase
+            .from('estado_incubadora')
+            .update({ estado: "Inactiva" })
+            .eq('id_incubadora', id);
 
-        if (res.ok) {
-            alert("🛑 Comando de parada enviado");
-            cargarEstadoActual();
-        }
+        if (error) throw error;
+
+        alert("🛑 Comando de parada enviado");
+        cargarEstadoActual();
     } catch (err) {
-        alert("❌ Error de conexión");
+        alert("❌ Error: " + err.message);
     }
+}
+
+function calcularTiempoRestante(fechaInicioUnix, diasTotales) {
+    if (!fechaInicioUnix || fechaInicioUnix === 0) return "---";
+    const offsetBolivia = 4 * 60 * 60 * 1000;
+    const fechaInicio = new Date((fechaInicioUnix * 1000) + offsetBolivia);
+    const fechaFin = new Date(fechaInicio.getTime() + (diasTotales * 24 * 60 * 60 * 1000));
+    const ahora = new Date();
+    const diferencia = fechaFin - ahora;
+    if (diferencia <= 0) return "¡Finalizada!";
+    const dias = Math.floor(diferencia / (1000 * 60 * 60 * 24));
+    const horas = Math.floor((diferencia % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutos = Math.floor((diferencia % (1000 * 60 * 60)) / (1000 * 60));
+    return `${dias}d ${horas}h ${minutos}m`;
 }
 
 function logout() {
