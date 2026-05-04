@@ -196,10 +196,31 @@ app.get("/estado/:id", async (req, res) => {
     res.json(data);
 });
 
-// Enviar configuración al ESP32 vía MQTT
+// Enviar configuración al ESP32 vía MQTT y actualizar Supabase
 app.post("/actualizar-config", async (req, res) => {
     const data = req.body;
+    
     try {
+        // 1. ACTUALIZAR SUPABASE PRIMERO
+        // Esto asegura que el Dashboard refleje el cambio de inmediato
+        const { error: dbError } = await supabase
+            .from('estado_incubadora')
+            .upsert({
+                id_incubadora: data.id,
+                estado: data.estado,
+                set_temp: data.set_temp,
+                set_hum: data.set_hum,
+                set_dias: data.set_dias,
+                set_rot: data.set_rot,
+                ultima_actualizacion: new Date().toISOString()
+            });
+
+        if (dbError) {
+            console.error("❌ Error actualizando Supabase:", dbError.message);
+            return res.status(500).send("Error al guardar en base de datos");
+        }
+
+        // 2. PREPARAR MENSAJE PARA EL ESP32
         const mensajeMQTT = JSON.stringify({
             id: data.id,
             estado: data.estado,
@@ -209,11 +230,25 @@ app.post("/actualizar-config", async (req, res) => {
             set_rot: data.set_rot
         });
 
-        mqttClient.publish("jhosimar/config", mensajeMQTT, (err) => {
-            if (err) return res.status(500).send("Error MQTT");
-            res.send("Configuración enviada");
-        });
-    } catch (e) { res.status(500).send("Error"); }
+        // 3. ENVIAR POR MQTT
+        if (mqttClient.connected) {
+            mqttClient.publish("jhosimar/config", mensajeMQTT, (err) => {
+                if (err) {
+                    console.error("❌ Error MQTT:", err);
+                    return res.status(500).send("Error al enviar comando al ESP32");
+                }
+                console.log("📤 Configuración enviada al ESP32 y guardada en DB:", mensajeMQTT);
+                res.send("✅ Configuración actualizada y enviada");
+            });
+        } else {
+            console.error("❌ MQTT Desconectado");
+            res.status(503).send("Servidor MQTT no disponible");
+        }
+
+    } catch (e) { 
+        console.error("❌ Error general:", e);
+        res.status(500).send("Error interno del servidor"); 
+    }
 });
 
 const PORT = process.env.PORT || 3000;
