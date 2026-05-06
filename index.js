@@ -26,16 +26,18 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
     port: 587,
-    secure: false, // false para usar STARTTLS en puerto 587
+    secure: false, 
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     },
     tls: {
-        // Esto ayuda a que Render no bloquee la conexión por certificados
         rejectUnauthorized: false 
     },
-    connectionTimeout: 10000, // 10 segundos de espera
+    // --- 🔹 AJUSTES DE TIMEOUT MEJORADOS ---
+    connectionTimeout: 20000, // 20 segundos
+    greetingTimeout: 20000,   // 20 segundos para el saludo inicial
+    socketTimeout: 20000,     // 20 segundos de inactividad
 });
 
 // Verificación de conexión inicial al servidor de correo
