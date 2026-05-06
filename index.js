@@ -22,8 +22,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
     },
 });
 
-// --- 🔹 CONFIGURACIÓN NODEMAILER ---
-// --- 🔹 CONFIGURACIÓN NODEMAILER ---
+// --- 🔹 CONFIGURACIÓN NODEMAILER (CORREGIDA) ---
 const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
     port: 587,
@@ -39,12 +38,12 @@ const transporter = nodemailer.createTransport({
     connectionTimeout: 10000, // 10 segundos de espera
 });
 
-// Verificación de conexión inicial (añade esto para ver si arranca bien)
+// Verificación de conexión inicial al servidor de correo
 transporter.verify(function (error, success) {
     if (error) {
-        console.log("❌ Error en la configuración de correo:", error);
+        console.error("❌ Error en la configuración de correo:", error);
     } else {
-        console.log("📧 Servidor de correo listo para enviar mensajes");
+        console.log("📧 Servidor de correo de Google listo para enviar mensajes");
     }
 });
 
@@ -54,7 +53,7 @@ const mqttClient = mqtt.connect("mqtts://e46fb974d55a4c96a5bd632a3617db64.s1.eu.
     password: process.env.MQTT_PASS,
     keepalive: 60,
     reconnectPeriod: 1000,
-    rejectUnauthorized: false // Necesario para algunos entornos gratuitos
+    rejectUnauthorized: false
 });
 
 mqttClient.on("connect", () => {
@@ -68,9 +67,7 @@ mqttClient.on("error", (err) => {
     console.error("❌ Error en MQTT:", err);
 });
 
-// --- 🔥 REALTIME: ESCUCHAR CAMBIOS EN SUPABASE Y REENVIAR AL ESP32 AUTOMÁTICAMENTE ---
-// Esto resuelve el problema de que el ESP32 no recibe si editas en la DB
-// Variable para guardar el último mensaje enviado y evitar ecos
+// --- 🔥 REALTIME: ESCUCHAR CAMBIOS EN SUPABASE Y REENVIAR AL ESP32 ---
 let ultimoMensajeEnviado = "";
 
 supabase
@@ -88,18 +85,16 @@ supabase
                 set_rot: data.set_rot
             });
 
-            // --- BLOQUEO DE BUCLE ---
-            // Si el mensaje es idéntico al anterior, lo ignoramos
+            // Bloqueo de bucle infinito
             if (mensajeMQTT === ultimoMensajeEnviado) {
                 return; 
             }
 
             if (mqttClient.connected) {
-                ultimoMensajeEnviado = mensajeMQTT; // Registramos lo que enviamos
+                ultimoMensajeEnviado = mensajeMQTT;
                 mqttClient.publish("jhosimar/config", mensajeMQTT);
                 console.log("📤 Sincronización única enviada al ESP32");
                 
-                // Limpiamos el registro después de 5 segundos para permitir cambios legítimos
                 setTimeout(() => { ultimoMensajeEnviado = ""; }, 5000);
             }
         }
@@ -142,28 +137,45 @@ mqttClient.on("message", async (topic, message) => {
     }
 });
 
-// --- ⏰ MONITOREO DE ALERTAS ---
+// --- ⏰ MONITOREO DE ALERTAS CON RASTREADORES ---
 async function sistemaDeAlertas() {
+    console.log("🔍 Iniciando revisión de alertas programada..."); // RASTREADOR 1
+    
     try {
-        const { data: incubadoras } = await supabase
+        const { data: incubadoras, error: errInc } = await supabase
             .from('estado_incubadora')
             .select('*')
             .eq('estado', 'Activa');
 
-        if (!incubadoras) return;
+        if (errInc) console.error("❌ Error leyendo incubadoras:", errInc);
+        if (!incubadoras || incubadoras.length === 0) {
+            return console.log("ℹ️ No hay incubadoras activas en la base de datos.");
+        }
 
         for (let r of incubadoras) {
-            const { data: lecturas } = await supabase
+            console.log(`📌 Revisando incubadora: ${r.id_incubadora}`); // RASTREADOR 2
+            
+            const { data: lecturas, error: errLec } = await supabase
                 .from('datos_incubadora')
                 .select('temperatura, humedad, fecha_hora')
                 .eq('id_incubadora', r.id_incubadora)
                 .order('fecha_hora', { ascending: false })
                 .limit(1);
 
+            if (errLec) console.error("❌ Error leyendo datos:", errLec);
+            
             const d = lecturas?.[0];
-            if (!d) continue;
+            if (!d) {
+                console.log(`⚠️ Sin lecturas previas para ${r.id_incubadora}`);
+                continue;
+            }
 
-            const diferenciaMinutos = (new Date() - new Date(d.fecha_hora)) / 60000;
+            const fechaLectura = new Date(d.fecha_hora);
+            const ahora = new Date();
+            const diferenciaMinutos = (ahora - fechaLectura) / 60000;
+            
+            console.log(`⏱️ Última lectura hace: ${diferenciaMinutos.toFixed(2)} mins. Temp actual: ${d.temperatura}°C, Set: ${r.set_temp}°C`); // RASTREADOR 3
+
             let alertMsg = "";
 
             if (diferenciaMinutos > 15) {
@@ -173,35 +185,48 @@ async function sistemaDeAlertas() {
             }
 
             if (alertMsg) {
-                console.log(`⚠️ Intentando enviar alerta para ${r.id_incubadora}...`);
-                const { data: user } = await supabase.from('usuarios').select('email').eq('id_incubadora', r.id_incubadora).maybeSingle();
+                console.log(`⚠️ Alerta disparada: ${alertMsg}`); // RASTREADOR 4
                 
+                const { data: user, error: errUsr } = await supabase
+                    .from('usuarios')
+                    .select('email')
+                    .eq('id_incubadora', r.id_incubadora)
+                    .maybeSingle();
+                
+                if (errUsr) console.error("❌ Error buscando usuario:", errUsr);
+
                 if (user?.email) {
-                    console.log(`📧 Intentando enviar correo a: ${user.email}`);
+                    console.log(`📧 Intentando enviar correo final a: ${user.email}`); // RASTREADOR 5
                     try {
-                        await transporter.sendMail({
+                        const info = await transporter.sendMail({
                             from: `"SmartEncub Pro" <${process.env.EMAIL_USER}>`,
                             to: user.email,
-                            subject: `⚠️ ALERTA: ${r.id_incubadora}`,
-                            html: `<div style="padding:20px; border:2px solid red; font-family: sans-serif;">
-                                    <h2>Notificación de Sistema</h2>
-                                    <p>${alertMsg}</p>
+                            subject: `⚠️ ALERTA DE SISTEMA: ${r.id_incubadora}`,
+                            html: `<div style="padding:20px; border:2px solid red; font-family: sans-serif; max-width: 600px; margin: auto;">
+                                    <h2 style="color: red; text-align: center;">Notificación Crítica</h2>
+                                    <p style="font-size: 16px;">${alertMsg}</p>
                                     <hr>
-                                    <small>Este es un mensaje automático de tu sistema de incubación.</small>
+                                    <small style="color: gray;">Este es un mensaje automático del sistema de control y monitoreo de SmartEncub Pro.</small>
                                    </div>`
                         });
-                        console.log("✅ Correo enviado exitosamente");
+                        console.log("✅ CORREO ENVIADO EXITOSAMENTE, ID:", info.messageId);
                     } catch (sendError) {
-                        console.error("❌ Error al enviar el correo tras conectar:", sendError.message);
+                        console.error("❌ Error de Nodemailer al intentar enviar:", sendError.message);
                     }
                 } else {
-                    console.log("🚫 No se encontró un correo asociado a este ID de incubadora");
+                    console.log(`🚫 Falla crítica: El ID ${r.id_incubadora} no tiene un email válido registrado en la tabla 'usuarios'`);
                 }
+            } else {
+                console.log(`✅ Todo normal para ${r.id_incubadora}, no se requieren alertas.`);
             }
         }
-    } catch (err) { console.error("❌ Error Alertas:", err.message); }
+    } catch (err) { 
+        console.error("❌ Error general en la función sistemaDeAlertas:", err.message); 
+    }
 }
-cron.schedule('* * * * *', sistemaDeAlertas);
+
+// Ejecutar cada 10 minutos
+cron.schedule('*/10 * * * *', sistemaDeAlertas);
 
 // --- 🌐 RUTAS API ---
 app.post("/login", async (req, res) => {
@@ -214,7 +239,6 @@ app.post("/login", async (req, res) => {
 app.post("/actualizar-config", async (req, res) => {
     const data = req.body;
 
-    // 1. Preparamos el JSON exacto que espera tu ESP32
     const mensajeMQTT = JSON.stringify({
         id: data.id,
         estado: data.estado,
@@ -224,10 +248,8 @@ app.post("/actualizar-config", async (req, res) => {
         set_rot: data.set_rot
     });
 
-    // 2. Verificamos si el servidor de Render está conectado a HiveMQ
     if (mqttClient.connected) {
         try {
-            // Enviamos el mensaje al tópico de configuración
             mqttClient.publish("jhosimar/config", mensajeMQTT, { qos: 1 }, (err) => {
                 if (err) {
                     console.error("❌ Error al publicar en MQTT:", err);
@@ -242,14 +264,12 @@ app.post("/actualizar-config", async (req, res) => {
             res.status(500).send("Error interno del servidor");
         }
     } else {
-        // 3. Si el broker MQTT está caído o desconectado
         console.error("⚠️ No hay conexión con HiveMQ");
         res.status(503).send("El servicio de mensajería no está disponible. Intenta de nuevo.");
     }
 });
 
-
-app.get("/ping", (req, res) => res.send("pong")); // Para evitar que Render se duerma
+app.get("/ping", (req, res) => res.send("pong")); 
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("🚀 Servidor activo en puerto " + PORT));
