@@ -16,74 +16,52 @@ app.use(express.static(path.join(__dirname, "public")));
 // --- 🔹 CONFIGURACIÓN SUPABASE ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// --- 🔹 CONFIGURACIÓN NODEMAILER (SOLUCIÓN DEFINITIVA) ---
+// --- 🔹 CONFIGURACIÓN NODEMAILER (BLINDAJE TOTAL) ---
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     host: 'smtp.gmail.com',
     port: 465,
-    secure: true, // SSL directo (más estable en Render)
-    pool: true,   // Mantiene la conexión abierta
+    secure: true, // SSL Directo
+    pool: true,   // Mantiene la conexión abierta para evitar nuevos timeouts
+    maxConnections: 5,
+    maxMessages: 100,
     auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS // Contraseña de aplicación de 16 letras
+        pass: process.env.EMAIL_PASS // Tu clave de 16 letras
     },
     tls: {
-        rejectUnauthorized: false
+        rejectUnauthorized: false, // Ignora errores de certificado de red
+        minVersion: "TLSv1.2"
     },
-    connectionTimeout: 20000, // 20 segundos
-    greetingTimeout: 20000,
-    socketTimeout: 20000
+    connectionTimeout: 40000, // Aumentado a 40 segundos
+    greetingTimeout: 40000,
+    socketTimeout: 40000
 });
 
-// Verificación de conexión inicial
+// Verificación de salud del correo
 transporter.verify((error) => {
     if (error) {
-        console.error("❌ Error SMTP:", error.message);
+        console.error("❌ ERROR CRÍTICO SMTP:", error.message);
+        console.log("👉 REVISA: 1. Contraseña de aplicación. 2. IP bloqueada en Gmail. 3. Puerto 465 en Render.");
     } else {
-        console.log("📧 Servidor de correo vinculado y listo para alertas");
+        console.log("📧 SISTEMA DE CORREO: Conexión establecida exitosamente.");
     }
 });
 
-// --- 📡 MQTT: CONEXIÓN ROBUSTA ---
+// --- 📡 CONFIGURACIÓN MQTT ---
 const mqttClient = mqtt.connect("mqtts://e46fb974d55a4c96a5bd632a3617db64.s1.eu.hivemq.cloud:8883", {
     username: process.env.MQTT_USER,
     password: process.env.MQTT_PASS,
-    keepalive: 60,
     reconnectPeriod: 1000,
     rejectUnauthorized: false
 });
 
 mqttClient.on("connect", () => {
-    console.log("✅ Conectado a HiveMQ Cloud");
+    console.log("✅ MQTT: Conectado a HiveMQ");
     mqttClient.subscribe("jhosimar/rtc");
 });
 
-// --- 🔥 REALTIME: ESCUCHAR CAMBIOS ---
-let ultimoMensajeEnviado = "";
-supabase
-    .channel('cambios-db')
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'estado_incubadora' }, (payload) => {
-        const data = payload.new;
-        const mensajeMQTT = JSON.stringify({
-            id: data.id_incubadora,
-            estado: data.estado,
-            set_temp: data.set_temp,
-            set_hum: data.set_hum,
-            set_dias: data.set_dias,
-            set_rot: data.set_rot
-        });
-
-        if (mensajeMQTT === ultimoMensajeEnviado) return;
-
-        if (mqttClient.connected) {
-            ultimoMensajeEnviado = mensajeMQTT;
-            mqttClient.publish("jhosimar/config", mensajeMQTT);
-            setTimeout(() => { ultimoMensajeEnviado = ""; }, 5000);
-        }
-    })
-    .subscribe();
-
-// --- 📩 RECEPCIÓN DE DATOS ---
+// --- 📩 PROCESAMIENTO DE DATOS ---
 mqttClient.on("message", async (topic, message) => {
     if (topic === "jhosimar/rtc") {
         try {
@@ -108,16 +86,16 @@ mqttClient.on("message", async (topic, message) => {
                     humedad: data.hum
                 });
             }
-        } catch (err) { console.error("❌ Error en datos:", err.message); }
+        } catch (err) { console.error("❌ Error MQTT:", err.message); }
     }
 });
 
-// --- ⏰ MONITOREO DE ALERTAS ---
+// --- ⏰ LÓGICA DE ALERTAS POR CORREO ---
 async function sistemaDeAlertas() {
-    console.log("🔍 Revisando alertas...");
+    console.log("🔍 [Cron] Revisando condiciones de incubadoras...");
     try {
         const { data: incubadoras } = await supabase.from('estado_incubadora').select('*').eq('estado', 'Activa');
-        if (!incubadoras || incubadoras.length === 0) return;
+        if (!incubadoras) return;
 
         for (let r of incubadoras) {
             const { data: lecturas } = await supabase
@@ -134,63 +112,47 @@ async function sistemaDeAlertas() {
             let alertMsg = "";
 
             if (diferenciaMinutos > 15) {
-                alertMsg = `🚨 <b>CONEXIÓN PERDIDA:</b> La incubadora ${r.id_incubadora} no reporta hace 15 min.`;
+                alertMsg = `La incubadora <b>${r.id_incubadora}</b> ha perdido conexión (15+ min).`;
             } else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
-                alertMsg = `🌡️ <b>ALERTA TEMPERATURA:</b> ${d.temperatura.toFixed(1)}°C (Set: ${r.set_temp}°C)`;
+                alertMsg = `Desviación de temperatura en <b>${r.id_incubadora}</b>: ${d.temperatura.toFixed(1)}°C (Set: ${r.set_temp}°C).`;
             }
 
             if (alertMsg) {
                 const { data: user } = await supabase.from('usuarios').select('email').eq('id_incubadora', r.id_incubadora).maybeSingle();
-                
                 if (user?.email) {
-                    console.log(`📧 Enviando correo a: ${user.email}`);
-                    try {
-                        await transporter.sendMail({
-                            from: `"SmartEncub Pro" <${process.env.EMAIL_USER}>`,
-                            to: user.email,
-                            subject: `⚠️ ALERTA SISTEMA: ${r.id_incubadora}`,
-                            html: `<div style="border:2px solid red; padding:20px; font-family:sans-serif;">
-                                    <h2>Notificación Urgente</h2>
-                                    <p>${alertMsg}</p>
-                                   </div>`
-                        });
-                        console.log("✅ Correo enviado con éxito");
-                    } catch (err) {
-                        console.error("❌ Error de envío:", err.message);
-                    }
+                    console.log(`📧 Intentando enviar alerta a: ${user.email}`);
+                    const mailOptions = {
+                        from: `"Monitoreo SmartEncub" <${process.env.EMAIL_USER}>`,
+                        to: user.email,
+                        subject: `⚠️ ALERTA: ${r.id_incubadora}`,
+                        html: `<div style="font-family:sans-serif; padding:20px; border:1px solid red;">
+                                <h2>Alerta de Incubación</h2>
+                                <p>${alertMsg}</p>
+                                <hr><small>Este es un mensaje automático del sistema.</small>
+                               </div>`
+                    };
+
+                    transporter.sendMail(mailOptions, (err, info) => {
+                        if (err) console.error("❌ Fallo el envío final:", err.message);
+                        else console.log("✅ Alerta enviada con éxito:", info.messageId);
+                    });
                 }
             }
         }
-    } catch (err) { console.error("❌ Error general alertas:", err.message); }
+    } catch (err) { console.error("❌ Error en ciclo de alertas:", err.message); }
 }
 
-// Cada 10 minutos
+// Escaneo cada 10 minutos
 cron.schedule('*/10 * * * *', sistemaDeAlertas);
 
-// --- 🌐 API ---
+// --- 🌐 RUTAS API ---
+app.get("/ping", (req, res) => res.send("Servidor Activo"));
+
 app.post("/login", async (req, res) => {
     const { usuario, contrasena } = req.body;
     const { data } = await supabase.from('usuarios').select('*').eq('usuario', usuario).eq('contrasena', contrasena).maybeSingle();
-    if (!data) return res.status(401).send("Error");
-    res.json(data);
+    res.json(data || { error: "No autorizado" });
 });
-
-app.post("/actualizar-config", async (req, res) => {
-    const data = req.body;
-    const mensajeMQTT = JSON.stringify({
-        id: data.id, estado: data.estado, set_temp: data.set_temp,
-        set_hum: data.set_hum, set_dias: data.set_dias, set_rot: data.set_rot
-    });
-
-    if (mqttClient.connected) {
-        mqttClient.publish("jhosimar/config", mensajeMQTT, { qos: 1 });
-        res.send("✅ Enviado");
-    } else {
-        res.status(503).send("Error MQTT");
-    }
-});
-
-app.get("/ping", (req, res) => res.send("pong"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Servidor en puerto " + PORT));
+app.listen(PORT, () => console.log("🚀 Backend operando en puerto " + PORT));
