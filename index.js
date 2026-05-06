@@ -25,8 +25,8 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 // --- 🔹 CONFIGURACIÓN NODEMAILER ---
 const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
-    port: 465,
-    secure: true, 
+    port: 587,
+    secure: false, // false para puerto 587
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
