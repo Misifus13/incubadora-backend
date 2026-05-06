@@ -93,88 +93,68 @@ async function sistemaDeAlertas() {
     try {
         console.log("⏱️ Revisando estado de las incubadoras...");
 
-        // 1. Consultamos las incubadoras activas y sus dueños (INNER JOIN)
-        // Nota: En Supabase, para hacer un JOIN, la tabla debe tener la Relación (Foreign Key) definida.
+        // 1. Obtenemos las incubadoras activas
         const { data: incubadoras, error: errInc } = await supabase
             .from('estado_incubadora')
-            .select(`
-                id_incubadora,
-                set_temp,
-                set_hum,
-                estado,
-                usuarios!inner (email)
-            `)
-            .eq('estado', 'Activa'); // Filtramos solo las Activas
+            .select('id_incubadora, set_temp, set_hum, estado')
+            .eq('estado', 'Activa');
 
         if (errInc) throw errInc;
-
-        if (!incubadoras || incubadoras.length === 0) {
-            console.log("Empty: No hay incubadoras en estado 'Activa' con usuarios asociados.");
-            return;
-        }
+        if (!incubadoras || incubadoras.length === 0) return;
 
         for (let r of incubadoras) {
-            // 2. Simulamos el CROSS APPLY obteniendo la última lectura de cada incubadora
-            const { data: lecturas, error: errData } = await supabase
+            // 2. Obtenemos la última lectura de esta incubadora
+            const { data: lecturas } = await supabase
                 .from('datos_incubadora')
                 .select('temperatura, humedad, fecha_hora')
                 .eq('id_incubadora', r.id_incubadora)
                 .order('fecha_hora', { ascending: false })
                 .limit(1);
 
-            if (errData) continue;
-
             const d = lecturas?.[0];
             if (!d) continue;
 
-            let alertMsg = "";
             const ahora = new Date();
             const fechaLectura = new Date(d.fecha_hora);
             const diferenciaMinutos = (ahora.getTime() - fechaLectura.getTime()) / 60000;
 
-            console.log(`Revisando ${r.id_incubadora}: Dif. minutos: ${diferenciaMinutos.toFixed(2)}`);
-
-            // --- LÓGICA DE CONDICIONES ---
-            // 1. CONDICIÓN: Desconexión (más de 1 minuto sin datos)
+            let alertMsg = "";
+            // --- CONDICIONES ---
             if (diferenciaMinutos > 1) {
                 alertMsg = `🚨 <b>ALERTA DE CONEXIÓN:</b> La incubadora ${r.id_incubadora} no envía datos hace más de 1 minuto.`;
-            } 
-            // 2. CONDICIÓN: Temperatura fuera de rango (+- 2°C)
-            else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
+            } else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
                 alertMsg = `🌡️ <b>ALERTA DE TEMPERATURA:</b> Actual: ${d.temperatura.toFixed(1)}°C (Deseada: ${r.set_temp}°C)`;
-            }
-            // 3. CONDICIÓN: Humedad alta
-            else if (d.humedad > (r.set_hum + 5)) {
+            } else if (d.humedad > (r.set_hum + 5)) {
                 alertMsg = `💧 <b>ALERTA DE HUMEDAD:</b> Actual: ${d.humedad.toFixed(1)}% (Límite: ${r.set_hum + 5}%)`;
             }
 
             if (alertMsg) {
-                const userEmail = r.usuarios?.email;
+                // 3. Buscamos el email del usuario por separado para evitar el error de relación
+                const { data: user } = await supabase
+                    .from('usuarios')
+                    .select('email')
+                    .eq('id_incubadora', r.id_incubadora)
+                    .maybeSingle();
                 
-                if (userEmail) {
+                if (user?.email) {
                     try {
                         let sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
-
                         sendSmtpEmail.subject = `⚠️ AVISO URGENTE: Incubadora ${r.id_incubadora}`;
                         sendSmtpEmail.htmlContent = `
                             <div style="font-family: sans-serif; border: 2px solid #e74c3c; padding: 20px; border-radius: 10px;">
                                 <h2 style="color: #e74c3c;">Notificación de Alerta</h2>
-                                <p>Estimado usuario,</p>
                                 <p>${alertMsg}</p>
                                 <hr>
-                                <p style="font-size: 0.8em; color: #7f8c8d;">Hora del reporte del servidor: ${ahora.toLocaleString()}</p>
-                                <p style="font-size: 0.8em; color: #7f8c8d;">Última lectura: ${fechaLectura.toLocaleString()}</p>
+                                <p style="font-size: 0.8em; color: #7f8c8d;">Hora reporte: ${ahora.toLocaleString()}</p>
                             </div>`;
                         
-                        // IMPORTANTE: Cambia este correo por tu remitente verificado en Brevo
-                        sendSmtpEmail.sender = { "name": "Sistema Incubadora Pro", "email": "tu-correo-verificado@gmail.com" };
-                        sendSmtpEmail.to = [{ "email": userEmail }];
+                        sendSmtpEmail.sender = { "name": "Sistema Incubadora Pro", "email": "TU_CORREO_REGISTRADO_EN_BREVO" };
+                        sendSmtpEmail.to = [{ "email": user.email }];
 
-                        const response = await apiInstance.sendTransacEmail(sendSmtpEmail);
-                        console.log(`✅ Alerta enviada a ${userEmail} para la incubadora ${r.id_incubadora}. ID: ${response.messageId}`);
-                        
+                        await apiInstance.sendTransacEmail(sendSmtpEmail);
+                        console.log(`✅ Alerta enviada a ${user.email}`);
                     } catch (sendError) {
-                        console.error(`❌ Error al enviar con Brevo a ${userEmail}:`, sendError.message);
+                        console.error(`❌ Error Brevo:`, sendError.message);
                     }
                 }
             }
