@@ -158,20 +158,23 @@ async function sistemaDeAlertas() {
             }
 
             if (alertMsg) {
+                console.log(`⚠️ Intentando enviar alerta para ${r.id_incubadora}...`);
                 const { data: user } = await supabase.from('usuarios').select('email').eq('id_incubadora', r.id_incubadora).maybeSingle();
+                
                 if (user?.email) {
+                    console.log(`📧 Enviando correo a: ${user.email}`);
                     await transporter.sendMail({
-                        from: `"SmartEncub Pro" <${process.env.EMAIL_USER}>`,
-                        to: user.email,
-                        subject: `⚠️ ALERTA: ${r.id_incubadora}`,
-                        html: `<div style="padding:20px; border:2px solid red;">${alertMsg}</div>`
+                        // ... tu config de mail
                     });
+                    console.log("✅ Correo enviado exitosamente");
+                } else {
+                    console.log("🚫 No se encontró un correo asociado a este ID de incubadora");
                 }
             }
         }
     } catch (err) { console.error("❌ Error Alertas:", err.message); }
 }
-cron.schedule('*/10 * * * *', sistemaDeAlertas);
+cron.schedule('* * * * *', sistemaDeAlertas);
 
 // --- 🌐 RUTAS API ---
 app.post("/login", async (req, res) => {
