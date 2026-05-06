@@ -136,7 +136,7 @@ async function sistemaDeAlertas() {
                             </div>`;
                         
                         // Remitente (Usa el correo con el que te registraste en Brevo)
-                        sendSmtpEmail.sender = { "name": "SmartEncub", "email": "tu-correo-brevo@gmail.com" }; 
+                        sendSmtpEmail.sender = { "name": "SmartEncub", "email": "wilfred1130594@gmail.com" }; 
                         sendSmtpEmail.to = [{ "email": user.email }];
 
                         const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
