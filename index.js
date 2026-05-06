@@ -113,16 +113,24 @@ mqttClient.on("message", async (topic, message) => {
 });
 
 // --- ⏰ MONITOREO DE ALERTAS CON RESEND ---
+// --- ⏰ MONITOREO DE ALERTAS (MIGRADO DE AZURE A SUPABASE/RESEND) ---
 async function sistemaDeAlertas() {
     try {
-        const { data: incubadoras } = await supabase
+        console.log("⏱️ Revisando estado de las incubadoras...");
+
+        // 1. Consultamos incubadoras activas
+        const { data: incubadoras, error: errInc } = await supabase
             .from('estado_incubadora')
             .select('*')
             .eq('estado', 'Activa');
 
-        if (!incubadoras) return;
+        if (errInc || !incubadoras || incubadoras.length === 0) {
+            console.log("Empty: No hay incubadoras en estado 'Activa'.");
+            return;
+        }
 
         for (let r of incubadoras) {
+            // 2. Buscamos la última lectura de esta incubadora específica
             const { data: lecturas } = await supabase
                 .from('datos_incubadora')
                 .select('temperatura, humedad, fecha_hora')
@@ -131,45 +139,73 @@ async function sistemaDeAlertas() {
                 .limit(1);
 
             const d = lecturas?.[0];
-            if (!d) continue;
+            if (!d) continue; // Si no hay datos, saltamos a la siguiente
 
-            const diferenciaMinutos = (new Date() - new Date(d.fecha_hora)) / 60000;
+            const ahora = new Date();
+            const fechaLectura = new Date(d.fecha_hora);
+            const diferenciaMinutos = (ahora - fechaLectura) / 60000;
+
+            // Log de depuración similar al que tenías en Azure
+            console.log(`Revisando ${r.id_incubadora}: Dif. minutos: ${diferenciaMinutos.toFixed(2)}`);
+
             let alertMsg = "";
 
-            if (diferenciaMinutos > 15) {
-                alertMsg = `🚨 <b>CONEXIÓN PERDIDA:</b> La incubadora ${r.id_incubadora} lleva 15 min sin reportar.`;
-            } else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
-                alertMsg = `🌡️ <b>ALERTA TEMPERATURA:</b> ${d.temperatura.toFixed(1)}°C (Esperado: ${r.set_temp}°C)`;
+            // --- 🔹 LÓGICA DE CONDICIONES (IGUAL A TU CÓDIGO ORIGINAL) ---
+            
+            // 1. CONDICIÓN: Desconexión (más de 2 minutos sin datos)
+            if (diferenciaMinutos > 2) {
+                alertMsg = `🚨 <b>ALERTA DE CONEXIÓN:</b> La incubadora ${r.id_incubadora} no envía datos hace más de 2 minutos.`;
+            } 
+            // 2. CONDICIÓN: Temperatura fuera de rango (+- 2°C)
+            else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
+                alertMsg = `🌡️ <b>ALERTA DE TEMPERATURA:</b> Actual: ${d.temperatura.toFixed(1)}°C (Deseada: ${r.set_temp}°C)`;
+            }
+            // 3. CONDICIÓN: Humedad alta (+5 del set)
+            else if (d.humedad > (r.set_hum + 5)) {
+                alertMsg = `💧 <b>ALERTA DE HUMEDAD:</b> Actual: ${d.humedad.toFixed(1)}% (Límite: ${r.set_hum + 5}%)`;
             }
 
             if (alertMsg) {
-                const { data: user } = await supabase.from('usuarios').select('email').eq('id_incubadora', r.id_incubadora).maybeSingle();
+                // 3. Obtenemos el email del usuario asociado
+                const { data: user } = await supabase
+                    .from('usuarios')
+                    .select('email')
+                    .eq('id_incubadora', r.id_incubadora)
+                    .maybeSingle();
                 
                 if (user?.email) {
-                    console.log(`📧 Enviando correo vía Resend a: ${user.email}`);
                     try {
-                        // 🔹 CAMBIO AQUÍ: Uso de la API de Resend
+                        // 4. ENVÍO VÍA RESEND
                         await resend.emails.send({
-                            from: 'SmartEncub <onboarding@resend.dev>',
+                            from: 'SmartEncub <onboarding@resend.dev>', // Cambiar por tu dominio verificado luego
                             to: user.email,
-                            subject: `⚠️ ALERTA: ${r.id_incubadora}`,
-                            html: `<div style="padding:20px; border:2px solid red; font-family: sans-serif;">
-                                    <h2>Notificación de Sistema</h2>
+                            subject: `⚠️ AVISO URGENTE: Incubadora ${r.id_incubadora}`,
+                            html: `
+                                <div style="font-family: sans-serif; border: 2px solid #e74c3c; padding: 20px; border-radius: 10px;">
+                                    <h2 style="color: #e74c3c;">Notificación de Alerta</h2>
+                                    <p>Estimado usuario,</p>
                                     <p>${alertMsg}</p>
                                     <hr>
-                                    <small>Este es un mensaje automático de tu sistema de incubación.</small>
-                                   </div>`
+                                    <p style="font-size: 0.8em; color: #7f8c8d;">Hora del reporte del servidor: ${ahora.toLocaleString()}</p>
+                                </div>
+                            `
                         });
-                        console.log("✅ Correo enviado exitosamente con Resend");
+                        console.log(`✅ Alerta enviada a ${user.email} para la incubadora ${r.id_incubadora}`);
                     } catch (sendError) {
                         console.error("❌ Error al enviar con Resend:", sendError.message);
                     }
+                } else {
+                    console.log(`🚫 No se encontró email para la incubadora ${r.id_incubadora}`);
                 }
             }
         }
-    } catch (err) { console.error("❌ Error Alertas:", err.message); }
+    } catch (err) {
+        console.error("❌ Error en el sistema de monitoreo:", err.message);
+    }
 }
-cron.schedule('*/10 * * * *', sistemaDeAlertas); // Ejecución cada 10 min
+
+// Se mantiene la programación cada minuto
+cron.schedule('* * * * *', sistemaDeAlertas);
 
 // --- 🌐 RUTAS API ---
 app.post("/login", async (req, res) => {
