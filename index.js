@@ -14,40 +14,37 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 // --- 🔹 CONFIGURACIÓN SUPABASE ---
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY, {
-    realtime: {
-        params: {
-            eventsPerSecond: 10,
-        },
-    },
-});
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// --- 🔹 CONFIGURACIÓN NODEMAILER (CORREGIDA) ---
+// --- 🔹 CONFIGURACIÓN NODEMAILER (SOLUCIÓN DEFINITIVA) ---
 const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false, // false para usar STARTTLS en puerto 587
+    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true, // SSL directo (más estable en Render)
+    pool: true,   // Mantiene la conexión abierta
     auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        pass: process.env.EMAIL_PASS // Contraseña de aplicación de 16 letras
     },
     tls: {
-        // Esto ayuda a que Render no bloquee la conexión por certificados
-        rejectUnauthorized: false 
+        rejectUnauthorized: false
     },
-    connectionTimeout: 10000, // 10 segundos de espera
+    connectionTimeout: 20000, // 20 segundos
+    greetingTimeout: 20000,
+    socketTimeout: 20000
 });
 
-// Verificación de conexión inicial al servidor de correo
-transporter.verify(function (error, success) {
+// Verificación de conexión inicial
+transporter.verify((error) => {
     if (error) {
-        console.error("❌ Error en la configuración de correo:", error);
+        console.error("❌ Error SMTP:", error.message);
     } else {
-        console.log("📧 Servidor de correo de Google listo para enviar mensajes");
+        console.log("📧 Servidor de correo vinculado y listo para alertas");
     }
 });
 
-// --- 📡 MQTT: CONEXIÓN ROBUSTA PARA RENDER ---
+// --- 📡 MQTT: CONEXIÓN ROBUSTA ---
 const mqttClient = mqtt.connect("mqtts://e46fb974d55a4c96a5bd632a3617db64.s1.eu.hivemq.cloud:8883", {
     username: process.env.MQTT_USER,
     password: process.env.MQTT_PASS,
@@ -57,64 +54,42 @@ const mqttClient = mqtt.connect("mqtts://e46fb974d55a4c96a5bd632a3617db64.s1.eu.
 });
 
 mqttClient.on("connect", () => {
-    console.log("✅ Conectado a HiveMQ Cloud desde Render");
-    mqttClient.subscribe("jhosimar/rtc", (err) => {
-        if (!err) console.log("📡 Suscrito al tópico de entrada: jhosimar/rtc");
-    });
+    console.log("✅ Conectado a HiveMQ Cloud");
+    mqttClient.subscribe("jhosimar/rtc");
 });
 
-mqttClient.on("error", (err) => {
-    console.error("❌ Error en MQTT:", err);
-});
-
-// --- 🔥 REALTIME: ESCUCHAR CAMBIOS EN SUPABASE Y REENVIAR AL ESP32 ---
+// --- 🔥 REALTIME: ESCUCHAR CAMBIOS ---
 let ultimoMensajeEnviado = "";
-
 supabase
     .channel('cambios-db')
-    .on('postgres_changes', 
-        { event: 'UPDATE', schema: 'public', table: 'estado_incubadora' }, 
-        (payload) => {
-            const data = payload.new;
-            const mensajeMQTT = JSON.stringify({
-                id: data.id_incubadora,
-                estado: data.estado,
-                set_temp: data.set_temp,
-                set_hum: data.set_hum,
-                set_dias: data.set_dias,
-                set_rot: data.set_rot
-            });
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'estado_incubadora' }, (payload) => {
+        const data = payload.new;
+        const mensajeMQTT = JSON.stringify({
+            id: data.id_incubadora,
+            estado: data.estado,
+            set_temp: data.set_temp,
+            set_hum: data.set_hum,
+            set_dias: data.set_dias,
+            set_rot: data.set_rot
+        });
 
-            // Bloqueo de bucle infinito
-            if (mensajeMQTT === ultimoMensajeEnviado) {
-                return; 
-            }
+        if (mensajeMQTT === ultimoMensajeEnviado) return;
 
-            if (mqttClient.connected) {
-                ultimoMensajeEnviado = mensajeMQTT;
-                mqttClient.publish("jhosimar/config", mensajeMQTT);
-                console.log("📤 Sincronización única enviada al ESP32");
-                
-                setTimeout(() => { ultimoMensajeEnviado = ""; }, 5000);
-            }
+        if (mqttClient.connected) {
+            ultimoMensajeEnviado = mensajeMQTT;
+            mqttClient.publish("jhosimar/config", mensajeMQTT);
+            setTimeout(() => { ultimoMensajeEnviado = ""; }, 5000);
         }
-    )
+    })
     .subscribe();
 
-// --- 📩 RECEPCIÓN DE DATOS DESDE EL ESP32 ---
+// --- 📩 RECEPCIÓN DE DATOS ---
 mqttClient.on("message", async (topic, message) => {
     if (topic === "jhosimar/rtc") {
         try {
             const data = JSON.parse(message.toString());
-            console.log("📩 Datos recibidos del ESP32:", data);
-
-            const { data: existe } = await supabase
-                .from('incubadoras')
-                .select('id_incubadora')
-                .eq('id_incubadora', data.id)
-                .maybeSingle();
-            
-            if (!existe) return console.log(`🚫 ID ${data.id} no autorizado.`);
+            const { data: existe } = await supabase.from('incubadoras').select('id_incubadora').eq('id_incubadora', data.id).maybeSingle();
+            if (!existe) return;
 
             if (data.tipo === "ESTADO") {
                 await supabase.from('estado_incubadora').upsert({
@@ -133,143 +108,89 @@ mqttClient.on("message", async (topic, message) => {
                     humedad: data.hum
                 });
             }
-        } catch (err) { console.error("❌ Error procesando mensaje MQTT:", err.message); }
+        } catch (err) { console.error("❌ Error en datos:", err.message); }
     }
 });
 
-// --- ⏰ MONITOREO DE ALERTAS CON RASTREADORES ---
+// --- ⏰ MONITOREO DE ALERTAS ---
 async function sistemaDeAlertas() {
-    console.log("🔍 Iniciando revisión de alertas programada..."); // RASTREADOR 1
-    
+    console.log("🔍 Revisando alertas...");
     try {
-        const { data: incubadoras, error: errInc } = await supabase
-            .from('estado_incubadora')
-            .select('*')
-            .eq('estado', 'Activa');
-
-        if (errInc) console.error("❌ Error leyendo incubadoras:", errInc);
-        if (!incubadoras || incubadoras.length === 0) {
-            return console.log("ℹ️ No hay incubadoras activas en la base de datos.");
-        }
+        const { data: incubadoras } = await supabase.from('estado_incubadora').select('*').eq('estado', 'Activa');
+        if (!incubadoras || incubadoras.length === 0) return;
 
         for (let r of incubadoras) {
-            console.log(`📌 Revisando incubadora: ${r.id_incubadora}`); // RASTREADOR 2
-            
-            const { data: lecturas, error: errLec } = await supabase
+            const { data: lecturas } = await supabase
                 .from('datos_incubadora')
-                .select('temperatura, humedad, fecha_hora')
+                .select('temperatura, fecha_hora')
                 .eq('id_incubadora', r.id_incubadora)
                 .order('fecha_hora', { ascending: false })
                 .limit(1);
 
-            if (errLec) console.error("❌ Error leyendo datos:", errLec);
-            
             const d = lecturas?.[0];
-            if (!d) {
-                console.log(`⚠️ Sin lecturas previas para ${r.id_incubadora}`);
-                continue;
-            }
+            if (!d) continue;
 
-            const fechaLectura = new Date(d.fecha_hora);
-            const ahora = new Date();
-            const diferenciaMinutos = (ahora - fechaLectura) / 60000;
-            
-            console.log(`⏱️ Última lectura hace: ${diferenciaMinutos.toFixed(2)} mins. Temp actual: ${d.temperatura}°C, Set: ${r.set_temp}°C`); // RASTREADOR 3
-
+            const diferenciaMinutos = (new Date() - new Date(d.fecha_hora)) / 60000;
             let alertMsg = "";
 
             if (diferenciaMinutos > 15) {
-                alertMsg = `🚨 <b>CONEXIÓN PERDIDA:</b> La incubadora ${r.id_incubadora} lleva 15 min sin reportar.`;
+                alertMsg = `🚨 <b>CONEXIÓN PERDIDA:</b> La incubadora ${r.id_incubadora} no reporta hace 15 min.`;
             } else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
-                alertMsg = `🌡️ <b>ALERTA TEMPERATURA:</b> ${d.temperatura.toFixed(1)}°C (Esperado: ${r.set_temp}°C)`;
+                alertMsg = `🌡️ <b>ALERTA TEMPERATURA:</b> ${d.temperatura.toFixed(1)}°C (Set: ${r.set_temp}°C)`;
             }
 
             if (alertMsg) {
-                console.log(`⚠️ Alerta disparada: ${alertMsg}`); // RASTREADOR 4
+                const { data: user } = await supabase.from('usuarios').select('email').eq('id_incubadora', r.id_incubadora).maybeSingle();
                 
-                const { data: user, error: errUsr } = await supabase
-                    .from('usuarios')
-                    .select('email')
-                    .eq('id_incubadora', r.id_incubadora)
-                    .maybeSingle();
-                
-                if (errUsr) console.error("❌ Error buscando usuario:", errUsr);
-
                 if (user?.email) {
-                    console.log(`📧 Intentando enviar correo final a: ${user.email}`); // RASTREADOR 5
+                    console.log(`📧 Enviando correo a: ${user.email}`);
                     try {
-                        const info = await transporter.sendMail({
+                        await transporter.sendMail({
                             from: `"SmartEncub Pro" <${process.env.EMAIL_USER}>`,
                             to: user.email,
-                            subject: `⚠️ ALERTA DE SISTEMA: ${r.id_incubadora}`,
-                            html: `<div style="padding:20px; border:2px solid red; font-family: sans-serif; max-width: 600px; margin: auto;">
-                                    <h2 style="color: red; text-align: center;">Notificación Crítica</h2>
-                                    <p style="font-size: 16px;">${alertMsg}</p>
-                                    <hr>
-                                    <small style="color: gray;">Este es un mensaje automático del sistema de control y monitoreo de SmartEncub Pro.</small>
+                            subject: `⚠️ ALERTA SISTEMA: ${r.id_incubadora}`,
+                            html: `<div style="border:2px solid red; padding:20px; font-family:sans-serif;">
+                                    <h2>Notificación Urgente</h2>
+                                    <p>${alertMsg}</p>
                                    </div>`
                         });
-                        console.log("✅ CORREO ENVIADO EXITOSAMENTE, ID:", info.messageId);
-                    } catch (sendError) {
-                        console.error("❌ Error de Nodemailer al intentar enviar:", sendError.message);
+                        console.log("✅ Correo enviado con éxito");
+                    } catch (err) {
+                        console.error("❌ Error de envío:", err.message);
                     }
-                } else {
-                    console.log(`🚫 Falla crítica: El ID ${r.id_incubadora} no tiene un email válido registrado en la tabla 'usuarios'`);
                 }
-            } else {
-                console.log(`✅ Todo normal para ${r.id_incubadora}, no se requieren alertas.`);
             }
         }
-    } catch (err) { 
-        console.error("❌ Error general en la función sistemaDeAlertas:", err.message); 
-    }
+    } catch (err) { console.error("❌ Error general alertas:", err.message); }
 }
 
-// Ejecutar cada 10 minutos
+// Cada 10 minutos
 cron.schedule('*/10 * * * *', sistemaDeAlertas);
 
-// --- 🌐 RUTAS API ---
+// --- 🌐 API ---
 app.post("/login", async (req, res) => {
     const { usuario, contrasena } = req.body;
     const { data } = await supabase.from('usuarios').select('*').eq('usuario', usuario).eq('contrasena', contrasena).maybeSingle();
-    if (!data) return res.status(401).send("Credenciales inválidas");
+    if (!data) return res.status(401).send("Error");
     res.json(data);
 });
 
 app.post("/actualizar-config", async (req, res) => {
     const data = req.body;
-
     const mensajeMQTT = JSON.stringify({
-        id: data.id,
-        estado: data.estado,
-        set_temp: data.set_temp,
-        set_hum: data.set_hum,
-        set_dias: data.set_dias,
-        set_rot: data.set_rot
+        id: data.id, estado: data.estado, set_temp: data.set_temp,
+        set_hum: data.set_hum, set_dias: data.set_dias, set_rot: data.set_rot
     });
 
     if (mqttClient.connected) {
-        try {
-            mqttClient.publish("jhosimar/config", mensajeMQTT, { qos: 1 }, (err) => {
-                if (err) {
-                    console.error("❌ Error al publicar en MQTT:", err);
-                    return res.status(500).send("Error al enviar comando al ESP32");
-                }
-                
-                console.log("🚀 Instrucción enviada directo al ESP32:", mensajeMQTT);
-                res.send("✅ Comando enviado. Esperando confirmación del dispositivo...");
-            });
-        } catch (error) {
-            console.error("❌ Error interno:", error);
-            res.status(500).send("Error interno del servidor");
-        }
+        mqttClient.publish("jhosimar/config", mensajeMQTT, { qos: 1 });
+        res.send("✅ Enviado");
     } else {
-        console.error("⚠️ No hay conexión con HiveMQ");
-        res.status(503).send("El servicio de mensajería no está disponible. Intenta de nuevo.");
+        res.status(503).send("Error MQTT");
     }
 });
 
-app.get("/ping", (req, res) => res.send("pong")); 
+app.get("/ping", (req, res) => res.send("pong"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Servidor activo en puerto " + PORT));
+app.listen(PORT, () => console.log("🚀 Servidor en puerto " + PORT));
