@@ -24,28 +24,23 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 
 // --- 🔹 CONFIGURACIÓN NODEMAILER (CORREGIDA) ---
 const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false, 
+    service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     },
+    pool: true, // Mantiene la conexión abierta para múltiples correos
     tls: {
-        rejectUnauthorized: false 
-    },
-    // --- 🔹 AJUSTES DE TIMEOUT MEJORADOS ---
-    connectionTimeout: 20000, // 20 segundos
-    greetingTimeout: 20000,   // 20 segundos para el saludo inicial
-    socketTimeout: 20000,     // 20 segundos de inactividad
+        rejectUnauthorized: false
+    }
 });
 
-// Verificación de conexión inicial al servidor de correo
-transporter.verify(function (error, success) {
+// Verificación de conexión
+transporter.verify((error) => {
     if (error) {
-        console.error("❌ Error en la configuración de correo:", error);
+        console.error("❌ Error de configuración de correo:", error.message);
     } else {
-        console.log("📧 Servidor de correo de Google listo para enviar mensajes");
+        console.log("📧 Servidor de correo listo para enviar a la base de datos");
     }
 });
 
@@ -141,90 +136,64 @@ mqttClient.on("message", async (topic, message) => {
 
 // --- ⏰ MONITOREO DE ALERTAS CON RASTREADORES ---
 async function sistemaDeAlertas() {
-    console.log("🔍 Iniciando revisión de alertas programada..."); // RASTREADOR 1
-    
+    console.log("🔍 Revisando estado de incubadoras...");
     try {
-        const { data: incubadoras, error: errInc } = await supabase
+        const { data: incubadoras } = await supabase
             .from('estado_incubadora')
             .select('*')
             .eq('estado', 'Activa');
 
-        if (errInc) console.error("❌ Error leyendo incubadoras:", errInc);
-        if (!incubadoras || incubadoras.length === 0) {
-            return console.log("ℹ️ No hay incubadoras activas en la base de datos.");
-        }
+        if (!incubadoras || incubadoras.length === 0) return;
 
         for (let r of incubadoras) {
-            console.log(`📌 Revisando incubadora: ${r.id_incubadora}`); // RASTREADOR 2
-            
-            const { data: lecturas, error: errLec } = await supabase
+            const { data: lecturas } = await supabase
                 .from('datos_incubadora')
-                .select('temperatura, humedad, fecha_hora')
+                .select('temperatura, fecha_hora')
                 .eq('id_incubadora', r.id_incubadora)
                 .order('fecha_hora', { ascending: false })
                 .limit(1);
 
-            if (errLec) console.error("❌ Error leyendo datos:", errLec);
-            
             const d = lecturas?.[0];
-            if (!d) {
-                console.log(`⚠️ Sin lecturas previas para ${r.id_incubadora}`);
-                continue;
-            }
+            if (!d) continue;
 
-            const fechaLectura = new Date(d.fecha_hora);
-            const ahora = new Date();
-            const diferenciaMinutos = (ahora - fechaLectura) / 60000;
-            
-            console.log(`⏱️ Última lectura hace: ${diferenciaMinutos.toFixed(2)} mins. Temp actual: ${d.temperatura}°C, Set: ${r.set_temp}°C`); // RASTREADOR 3
-
+            const diferenciaMinutos = (new Date() - new Date(d.fecha_hora)) / 60000;
             let alertMsg = "";
 
             if (diferenciaMinutos > 15) {
-                alertMsg = `🚨 <b>CONEXIÓN PERDIDA:</b> La incubadora ${r.id_incubadora} lleva 15 min sin reportar.`;
+                alertMsg = `🚨 <b>CONEXIÓN PERDIDA:</b> La incubadora ${r.id_incubadora} no reporta datos.`;
             } else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
-                alertMsg = `🌡️ <b>ALERTA TEMPERATURA:</b> ${d.temperatura.toFixed(1)}°C (Esperado: ${r.set_temp}°C)`;
+                alertMsg = `🌡️ <b>ALERTA TEMPERATURA:</b> ${d.temperatura.toFixed(1)}°C (Set: ${r.set_temp}°C)`;
             }
 
             if (alertMsg) {
-                console.log(`⚠️ Alerta disparada: ${alertMsg}`); // RASTREADOR 4
-                
-                const { data: user, error: errUsr } = await supabase
+                // Buscamos el correo dinámicamente en la tabla 'usuarios'
+                const { data: user } = await supabase
                     .from('usuarios')
                     .select('email')
                     .eq('id_incubadora', r.id_incubadora)
                     .maybeSingle();
                 
-                if (errUsr) console.error("❌ Error buscando usuario:", errUsr);
-
                 if (user?.email) {
-                    console.log(`📧 Intentando enviar correo final a: ${user.email}`); // RASTREADOR 5
+                    console.log(`📧 Enviando alerta a: ${user.email}`);
                     try {
-                        const info = await transporter.sendMail({
+                        await transporter.sendMail({
                             from: `"SmartEncub Pro" <${process.env.EMAIL_USER}>`,
-                            to: user.email,
-                            subject: `⚠️ ALERTA DE SISTEMA: ${r.id_incubadora}`,
-                            html: `<div style="padding:20px; border:2px solid red; font-family: sans-serif; max-width: 600px; margin: auto;">
-                                    <h2 style="color: red; text-align: center;">Notificación Crítica</h2>
-                                    <p style="font-size: 16px;">${alertMsg}</p>
-                                    <hr>
-                                    <small style="color: gray;">Este es un mensaje automático del sistema de control y monitoreo de SmartEncub Pro.</small>
+                            to: user.email, // Aquí se envía al correo registrado en tu DB
+                            subject: `⚠️ ALERTA SISTEMA: ${r.id_incubadora}`,
+                            html: `<div style="border:2px solid red; padding:20px; font-family:sans-serif;">
+                                    <h2>Aviso de Emergencia</h2>
+                                    <p>${alertMsg}</p>
+                                    <p>Por favor, revisa el hardware de tu incubadora.</p>
                                    </div>`
                         });
-                        console.log("✅ CORREO ENVIADO EXITOSAMENTE, ID:", info.messageId);
-                    } catch (sendError) {
-                        console.error("❌ Error de Nodemailer al intentar enviar:", sendError.message);
+                        console.log(`✅ Correo enviado a ${user.email}`);
+                    } catch (err) {
+                        console.error(`❌ Fallo el envío a ${user.email}:`, err.message);
                     }
-                } else {
-                    console.log(`🚫 Falla crítica: El ID ${r.id_incubadora} no tiene un email válido registrado en la tabla 'usuarios'`);
                 }
-            } else {
-                console.log(`✅ Todo normal para ${r.id_incubadora}, no se requieren alertas.`);
             }
         }
-    } catch (err) { 
-        console.error("❌ Error general en la función sistemaDeAlertas:", err.message); 
-    }
+    } catch (err) { console.error("❌ Error en sistemaDeAlertas:", err.message); }
 }
 
 // Ejecutar cada 10 minutos
