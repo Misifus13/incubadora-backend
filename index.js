@@ -88,22 +88,25 @@ mqttClient.on("message", async (topic, message) => {
 });
 
 // --- ⏰ MONITOREO DE ALERTAS ---
-// --- ⏰ MONITOREO DE ALERTAS (ADAPTADO A BREVO Y SUPABASE) ---
 async function sistemaDeAlertas() {
     try {
         console.log("⏱️ Revisando estado de las incubadoras...");
-
-        // 1. Obtenemos las incubadoras activas
+        
+        // 1. Obtenemos las incubadoras activas (Consulta simple sin JOINs)
         const { data: incubadoras, error: errInc } = await supabase
             .from('estado_incubadora')
-            .select('id_incubadora, set_temp, set_hum, estado')
+            .select('*')
             .eq('estado', 'Activa');
 
         if (errInc) throw errInc;
-        if (!incubadoras || incubadoras.length === 0) return;
+
+        if (!incubadoras || incubadoras.length === 0) {
+            console.log("Empty: No hay incubadoras activas.");
+            return;
+        }
 
         for (let r of incubadoras) {
-            // 2. Obtenemos la última lectura de esta incubadora
+            // 2. Obtenemos la última lectura de esta incubadora específica
             const { data: lecturas } = await supabase
                 .from('datos_incubadora')
                 .select('temperatura, humedad, fecha_hora')
@@ -116,20 +119,29 @@ async function sistemaDeAlertas() {
 
             const ahora = new Date();
             const fechaLectura = new Date(d.fecha_hora);
+            // Diferencia en minutos
             const diferenciaMinutos = (ahora.getTime() - fechaLectura.getTime()) / 60000;
 
+            console.log(`Revisando ${r.id_incubadora}: Dif. minutos: ${diferenciaMinutos.toFixed(2)}`);
+
             let alertMsg = "";
-            // --- CONDICIONES ---
+            
+            // --- 🔹 LÓGICA DE ALERTAS QUE SOLICITASTE ---
+            // 1. CONDICIÓN: Desconexión (más de 1 minuto sin datos)
             if (diferenciaMinutos > 1) {
                 alertMsg = `🚨 <b>ALERTA DE CONEXIÓN:</b> La incubadora ${r.id_incubadora} no envía datos hace más de 1 minuto.`;
-            } else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
+            } 
+            // 2. CONDICIÓN: Temperatura fuera de rango (+- 2°C)
+            else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
                 alertMsg = `🌡️ <b>ALERTA DE TEMPERATURA:</b> Actual: ${d.temperatura.toFixed(1)}°C (Deseada: ${r.set_temp}°C)`;
-            } else if (d.humedad > (r.set_hum + 5)) {
+            }
+            // 3. CONDICIÓN: Humedad alta (Diferencia de +5%)
+            else if (d.humedad > (r.set_hum + 5)) {
                 alertMsg = `💧 <b>ALERTA DE HUMEDAD:</b> Actual: ${d.humedad.toFixed(1)}% (Límite: ${r.set_hum + 5}%)`;
             }
 
             if (alertMsg) {
-                // 3. Buscamos el email del usuario por separado para evitar el error de relación
+                // 3. Buscamos el email del usuario por separado (Así evitamos el error de Relationship)
                 const { data: user } = await supabase
                     .from('usuarios')
                     .select('email')
@@ -137,30 +149,35 @@ async function sistemaDeAlertas() {
                     .maybeSingle();
                 
                 if (user?.email) {
+                    console.log(`📧 Enviando alerta a: ${user.email}`);
                     try {
                         let sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
+
                         sendSmtpEmail.subject = `⚠️ AVISO URGENTE: Incubadora ${r.id_incubadora}`;
                         sendSmtpEmail.htmlContent = `
                             <div style="font-family: sans-serif; border: 2px solid #e74c3c; padding: 20px; border-radius: 10px;">
                                 <h2 style="color: #e74c3c;">Notificación de Alerta</h2>
+                                <p>Estimado usuario,</p>
                                 <p>${alertMsg}</p>
                                 <hr>
                                 <p style="font-size: 0.8em; color: #7f8c8d;">Hora reporte: ${ahora.toLocaleString()}</p>
                             </div>`;
                         
-                        sendSmtpEmail.sender = { "name": "Sistema Incubadora Pro", "email": "TU_CORREO_REGISTRADO_EN_BREVO" };
+                        // RECUERDA: Este email debe ser el que registraste en Brevo
+                        sendSmtpEmail.sender = { "name": "Sistema Incubadora Pro", "email": "tu-correo-verificado-en-brevo@gmail.com" };
                         sendSmtpEmail.to = [{ "email": user.email }];
 
-                        await apiInstance.sendTransacEmail(sendSmtpEmail);
-                        console.log(`✅ Alerta enviada a ${user.email}`);
+                        const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
+                        console.log("✅ Correo enviado exitosamente. ID:", data.messageId || "OK");
+
                     } catch (sendError) {
-                        console.error(`❌ Error Brevo:`, sendError.message);
+                        console.error("❌ Error enviando con Brevo:", sendError.message);
                     }
                 }
             }
         }
-    } catch (err) {
-        console.error("❌ Error en el sistema de monitoreo:", err.message);
+    } catch (err) { 
+        console.error("❌ Error en el sistema de monitoreo:", err.message); 
     }
 }
 
