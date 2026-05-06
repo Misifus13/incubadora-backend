@@ -4,11 +4,15 @@ const { createClient } = require('@supabase/supabase-js');
 const express = require("express");
 const path = require("path");
 const cors = require("cors");
-const { Resend } = require('resend'); 
+const SibApiV3Sdk = require('@getbrevo/brevo'); // 🔹 Brevo SDK
 const cron = require('node-cron');
 
 const app = express();
-const resend = new Resend(process.env.RESEND_API_KEY);
+
+// --- 📩 CONFIGURACIÓN DE BREVO ---
+let apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+let apiKey = apiInstance.authentications['apiKey'];
+apiKey.apiKey = process.env.BREVO_API_KEY; // 🔹 Usa tu API Key de Brevo
 
 app.use(cors());
 app.use(express.json());
@@ -100,7 +104,6 @@ async function sistemaDeAlertas() {
             const d = lecturas?.[0];
             if (!d) continue;
 
-            // 🔹 CORRECCIÓN DE TIEMPO: Usamos getTime() para evitar problemas de zona horaria
             const ahora = new Date();
             const fechaLectura = new Date(d.fecha_hora);
             const diferenciaMinutos = (ahora.getTime() - fechaLectura.getTime()) / 60000;
@@ -118,27 +121,29 @@ async function sistemaDeAlertas() {
                 const { data: user } = await supabase.from('usuarios').select('email').eq('id_incubadora', r.id_incubadora).maybeSingle();
                 
                 if (user?.email) {
-                    console.log(`📧 Enviando correo a: ${user.email}`);
+                    console.log(`📧 Enviando correo vía Brevo a: ${user.email}`);
                     try {
-                        const { data, error } = await resend.emails.send({
-                            from: 'SmartEncub <onboarding@resend.dev>',
-                            to: user.email,
-                            subject: `⚠️ ALERTA: ${r.id_incubadora}`,
-                            html: `<div style="padding:20px; border:2px solid red; font-family: sans-serif;">
-                                    <h2>Notificación de Sistema</h2>
-                                    <p>${alertMsg}</p>
-                                    <hr>
-                                    <small>Hora servidor: ${ahora.toLocaleString()}</small>
-                                   </div>`
-                        });
+                        // 🔹 Lógica de envío con Brevo
+                        let sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
+
+                        sendSmtpEmail.subject = `⚠️ ALERTA: ${r.id_incubadora}`;
+                        sendSmtpEmail.htmlContent = `
+                            <div style="padding:20px; border:2px solid red; font-family: sans-serif;">
+                                <h2>Notificación de Sistema</h2>
+                                <p>${alertMsg}</p>
+                                <hr>
+                                <small>Hora servidor: ${ahora.toLocaleString()}</small>
+                            </div>`;
                         
-                        if (error) {
-                            console.error("❌ Error de Resend API:", error);
-                        } else {
-                            console.log("✅ Respuesta de Resend exitosa:", data.id);
-                        }
+                        // Remitente (Usa el correo con el que te registraste en Brevo)
+                        sendSmtpEmail.sender = { "name": "SmartEncub", "email": "tu-correo-brevo@gmail.com" }; 
+                        sendSmtpEmail.to = [{ "email": user.email }];
+
+                        const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
+                        console.log("✅ Correo enviado exitosamente con Brevo. ID:", data.messageId);
+
                     } catch (sendError) {
-                        console.error("❌ Error crítico en envío:", sendError.message);
+                        console.error("❌ Error enviando con Brevo:", sendError.message);
                     }
                 }
             }
@@ -146,7 +151,6 @@ async function sistemaDeAlertas() {
     } catch (err) { console.error("❌ Error Alertas:", err.message); }
 }
 
-// Ejecución cada 10 min para no saturar la cuenta gratis
 cron.schedule('*/10 * * * *', sistemaDeAlertas);
 
 // --- 🌐 RUTAS API ---
