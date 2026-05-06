@@ -164,7 +164,7 @@ async function sistemaDeAlertas() {
                             </div>`;
                         
                         // RECUERDA: Este email debe ser el que registraste en Brevo
-                        sendSmtpEmail.sender = { "name": "Sistema Incubadora Pro", "email": "tu-correo-verificado-en-brevo@gmail.com" };
+                        sendSmtpEmail.sender = { "name": "Sistema Incubadora Pro", "email": "wilfred1130594@gmail.com" };
                         sendSmtpEmail.to = [{ "email": user.email }];
 
                         const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
