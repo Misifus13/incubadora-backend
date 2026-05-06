@@ -138,7 +138,7 @@ async function sistemaDeAlertas() {
             const diferenciaMinutos = (new Date() - new Date(d.fecha_hora)) / 60000;
             let alertMsg = "";
 
-            if (diferenciaMinutos > 15) {
+            if (diferenciaMinutos > 1) {
                 alertMsg = `🚨 <b>CONEXIÓN PERDIDA:</b> La incubadora ${r.id_incubadora} lleva 15 min sin reportar.`;
             } else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
                 alertMsg = `🌡️ <b>ALERTA TEMPERATURA:</b> ${d.temperatura.toFixed(1)}°C (Esperado: ${r.set_temp}°C)`;
@@ -168,7 +168,7 @@ async function sistemaDeAlertas() {
 }
 
 // Configurado a cada 10 minutos para estabilidad
-cron.schedule('*/10 * * * *', sistemaDeAlertas);
+cron.schedule('* * * * *', sistemaDeAlertas);
 
 // --- 🌐 RUTAS API ---
 app.post("/login", async (req, res) => {
