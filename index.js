@@ -183,20 +183,39 @@ app.post("/login", async (req, res) => {
 
 app.post("/actualizar-config", async (req, res) => {
     const data = req.body;
-    const { error } = await supabase.from('estado_incubadora').upsert({
-        id_incubadora: data.id,
+
+    // 1. Preparamos el JSON exacto que espera tu ESP32
+    const mensajeMQTT = JSON.stringify({
+        id: data.id,
         estado: data.estado,
         set_temp: data.set_temp,
         set_hum: data.set_hum,
         set_dias: data.set_dias,
-        set_rot: data.set_rot,
-        ultima_actualizacion: new Date().toISOString()
+        set_rot: data.set_rot
     });
 
-    if (error) return res.status(500).send("Error en DB");
-
-    // El reenvío MQTT ocurre automáticamente arriba gracias al bloque .on('postgres_changes')
-    res.send("✅ Sincronización iniciada");
+    // 2. Verificamos si el servidor de Render está conectado a HiveMQ
+    if (mqttClient.connected) {
+        try {
+            // Enviamos el mensaje al tópico de configuración
+            mqttClient.publish("jhosimar/config", mensajeMQTT, { qos: 1 }, (err) => {
+                if (err) {
+                    console.error("❌ Error al publicar en MQTT:", err);
+                    return res.status(500).send("Error al enviar comando al ESP32");
+                }
+                
+                console.log("🚀 Instrucción enviada directo al ESP32:", mensajeMQTT);
+                res.send("✅ Comando enviado. Esperando confirmación del dispositivo...");
+            });
+        } catch (error) {
+            console.error("❌ Error interno:", error);
+            res.status(500).send("Error interno del servidor");
+        }
+    } else {
+        // 3. Si el broker MQTT está caído o desconectado
+        console.error("⚠️ No hay conexión con HiveMQ");
+        res.status(503).send("El servicio de mensajería no está disponible. Intenta de nuevo.");
+    }
 });
 
 
