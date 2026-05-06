@@ -23,13 +23,28 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 });
 
 // --- 🔹 CONFIGURACIÓN NODEMAILER ---
+// --- 🔹 CONFIGURACIÓN NODEMAILER ---
 const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
     port: 587,
-    secure: false, // false para puerto 587
+    secure: false, // false para usar STARTTLS en puerto 587
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
+    },
+    tls: {
+        // Esto ayuda a que Render no bloquee la conexión por certificados
+        rejectUnauthorized: false 
+    },
+    connectionTimeout: 10000, // 10 segundos de espera
+});
+
+// Verificación de conexión inicial (añade esto para ver si arranca bien)
+transporter.verify(function (error, success) {
+    if (error) {
+        console.log("❌ Error en la configuración de correo:", error);
+    } else {
+        console.log("📧 Servidor de correo listo para enviar mensajes");
     }
 });
 
@@ -162,11 +177,23 @@ async function sistemaDeAlertas() {
                 const { data: user } = await supabase.from('usuarios').select('email').eq('id_incubadora', r.id_incubadora).maybeSingle();
                 
                 if (user?.email) {
-                    console.log(`📧 Enviando correo a: ${user.email}`);
-                    await transporter.sendMail({
-                        // ... tu config de mail
-                    });
-                    console.log("✅ Correo enviado exitosamente");
+                    console.log(`📧 Intentando enviar correo a: ${user.email}`);
+                    try {
+                        await transporter.sendMail({
+                            from: `"SmartEncub Pro" <${process.env.EMAIL_USER}>`,
+                            to: user.email,
+                            subject: `⚠️ ALERTA: ${r.id_incubadora}`,
+                            html: `<div style="padding:20px; border:2px solid red; font-family: sans-serif;">
+                                    <h2>Notificación de Sistema</h2>
+                                    <p>${alertMsg}</p>
+                                    <hr>
+                                    <small>Este es un mensaje automático de tu sistema de incubación.</small>
+                                   </div>`
+                        });
+                        console.log("✅ Correo enviado exitosamente");
+                    } catch (sendError) {
+                        console.error("❌ Error al enviar el correo tras conectar:", sendError.message);
+                    }
                 } else {
                     console.log("🚫 No se encontró un correo asociado a este ID de incubadora");
                 }
