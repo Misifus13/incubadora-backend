@@ -1,8 +1,9 @@
+
 // 1. CONFIGURACIÓN DE CREDENCIALES
 const SUPABASE_URL = "https://qpuvmkpgdcsahewfuqre.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFwdXZta3BnZGNzYWhld2Z1cXJlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4MjY0NzYsImV4cCI6MjA5MzQwMjQ3Nn0.U0SQh1xIWh9IV6Bk3jVFr3V-AraEZG8rg40niwi-3cY";
 const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const API_URL = "https://incubadora-backend.onrender.com"; // Reemplaza con tu URL de Render
+
 let chart;
 let estadoActual = "INACTIVA";
 
@@ -152,31 +153,26 @@ function cerrarModal() {
 async function guardarCambios() {
     const id = localStorage.getItem("id_incubadora");
     const payload = {
-        id: id, // Importante: tu API de Node espera "id"
         estado: "Activa",
         set_temp: parseFloat(document.getElementById("inputTemp").value),
         set_hum: parseFloat(document.getElementById("inputHum").value),
         set_dias: parseInt(document.getElementById("inputDias").value),
-        set_rot: 1 // Asegúrate de enviar también la rotación si tu ESP32 la espera
+        ultima_actualizacion: new Date().toISOString()
     };
 
     try {
-        // LLAMADA DIRECTA AL SERVIDOR DE RENDER
-        const response = await fetch(`${API_URL}/actualizar-config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const { error } = await _supabase
+            .from('estado_incubadora')
+            .update(payload)
+            .eq('id_incubadora', id);
 
-        if (!response.ok) throw new Error("Error en el servidor de control");
+        if (error) throw error;
 
-        alert("🚀 Comando enviado al ESP32 con éxito");
+        alert("✅ Configuración enviada correctamente");
         cerrarModal();
-        
-        // Opcional: Esperamos un momento a que el ESP32 responda y actualice la DB
-        setTimeout(cargarEstadoActual, 2000); 
+        cargarEstadoActual();
     } catch (err) {
-        alert("❌ Error de conexión: " + err.message);
+        alert("❌ Error al actualizar: " + err.message);
     }
 }
 
@@ -185,27 +181,16 @@ async function cancelarIncubacion() {
     if (!confirm("⚠️ ¿Estás seguro de cancelar? El sistema se apagará.")) return;
 
     const id = localStorage.getItem("id_incubadora");
-    const payload = {
-        id: id,
-        estado: "Inactiva",
-        // Enviamos los valores actuales para que no se borren en el ESP32
-        set_temp: parseFloat(document.getElementById("setTemp").innerText),
-        set_hum: parseFloat(document.getElementById("setHum").innerText),
-        set_dias: parseInt(document.getElementById("setDias").innerText),
-        set_rot: 0 
-    };
-
     try {
-        const response = await fetch(`${API_URL}/actualizar-config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const { error } = await _supabase
+            .from('estado_incubadora')
+            .update({ estado: "Inactiva" })
+            .eq('id_incubadora', id);
 
-        if (!response.ok) throw new Error("No se pudo enviar la orden de parada");
+        if (error) throw error;
 
-        alert("🛑 Orden de apagado enviada");
-        setTimeout(cargarEstadoActual, 2000);
+        alert("🛑 Comando de parada enviado");
+        cargarEstadoActual();
     } catch (err) {
         alert("❌ Error: " + err.message);
     }
