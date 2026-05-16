@@ -64,6 +64,7 @@ async function cargarEstadoActual() {
                 document.getElementById("setTemp").innerText = data.set_temp ?? "0";
                 document.getElementById("setHum").innerText = data.set_hum ?? "0";
                 document.getElementById("setDias").innerText = data.set_dias ?? "0";
+                document.getElementById("setRot").innerText = data.set_rot ?? "0";
 
                 const timerElement = document.getElementById("tiempoRestante");
                 if (timerElement) {
@@ -144,6 +145,7 @@ function abrirModal() {
     document.getElementById("inputTemp").value = document.getElementById("setTemp").innerText;
     document.getElementById("inputHum").value = document.getElementById("setHum").innerText;
     document.getElementById("inputDias").value = document.getElementById("setDias").innerText;
+    document.getElementById("inputRot").value = document.getElementById("setRot").innerText;
     document.getElementById("modalEdit").style.display = "flex";
 }
 
@@ -161,7 +163,7 @@ async function guardarCambios() {
         set_temp: parseFloat(document.getElementById("inputTemp").value),
         set_hum: parseFloat(document.getElementById("inputHum").value),
         set_dias: parseInt(document.getElementById("inputDias").value),
-        set_rot: 1 // Enviamos 1 para activar la rotación inicial
+        set_rot: parseFloat(document.getElementById("inputRot").value)
     };
 
     try {
