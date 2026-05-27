@@ -81,6 +81,7 @@ mqttClient.on("message", async (topic, message) => {
                     id_incubadora: data.id,
                     temperatura: data.temp,
                     humedad: data.hum
+                    sensor_ok: data.sensor_ok ?? 1  // si no viene el campo, asume 1
                 });
             }
         } catch (err) { console.error("❌ Error MQTT:", err.message); }
@@ -109,7 +110,7 @@ async function sistemaDeAlertas() {
             // 2. Obtenemos la última lectura de esta incubadora específica
             const { data: lecturas } = await supabase
                 .from('datos_incubadora')
-                .select('temperatura, humedad, fecha_hora')
+                .select('temperatura, humedad, fecha_hora, sensor_ok')
                 .eq('id_incubadora', r.id_incubadora)
                 .order('fecha_hora', { ascending: false })
                 .limit(1);
@@ -126,16 +127,15 @@ async function sistemaDeAlertas() {
 
             let alertMsg = "";
             
-            // --- 🔹 LÓGICA DE ALERTAS QUE SOLICITASTE ---
-            // 1. CONDICIÓN: Desconexión (más de 1 minuto sin datos)
             if (diferenciaMinutos > 1) {
                 alertMsg = `🚨 <b>ALERTA DE CONEXIÓN:</b> La incubadora ${r.id_incubadora} no envía datos hace más de 1 minuto.`;
-            } 
-            // 2. CONDICIÓN: Temperatura fuera de rango (+- 2°C)
+            }
+            else if (d.sensor_ok === 0) {
+                alertMsg = `⚠️ <b>ALERTA DE SENSOR:</b> El sensor de la incubadora ${r.id_incubadora} está fallando. Funcionando con último valor conocido: ${d.temperatura.toFixed(1)}°C / ${d.humedad.toFixed(1)}%`;
+            }
             else if (Math.abs(d.temperatura - r.set_temp) >= 2) {
                 alertMsg = `🌡️ <b>ALERTA DE TEMPERATURA:</b> Actual: ${d.temperatura.toFixed(1)}°C (Deseada: ${r.set_temp}°C)`;
             }
-            // 3. CONDICIÓN: Humedad alta (Diferencia de +5%)
             else if (d.humedad > (r.set_hum + 5)) {
                 alertMsg = `💧 <b>ALERTA DE HUMEDAD:</b> Actual: ${d.humedad.toFixed(1)}% (Límite: ${r.set_hum + 5}%)`;
             }
