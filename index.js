@@ -80,7 +80,7 @@ mqttClient.on("message", async (topic, message) => {
                 await supabase.from('datos_incubadora').insert({
                     id_incubadora: data.id,
                     temperatura: data.temp,
-                    humedad: data.hum
+                    humedad: data.hum,
                     sensor_ok: data.sensor_ok ?? 1  // si no viene el campo, asume 1
                 });
             }
